@@ -1,7 +1,8 @@
 --// SellLemons Autofarm
 --// UI: catowice/p library (Matcha compatible)
 
-local Menu = loadstring(game:HttpGet('https://raw.githubusercontent.com/catowice/p/refs/heads/main/library.lua'))()
+loadstring(game:HttpGet('https://raw.githubusercontent.com/catowice/p/refs/heads/main/library.lua'))()
+local Menu = UILib
 
 --// Services
 local Players     = game:GetService("Players")
