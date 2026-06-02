@@ -7,12 +7,31 @@ local LocalPlayer = Players.LocalPlayer
 
 --// ─────────────────────────────────────────────
 --// Find the local player's tycoon
+--// Uses name comparison as fallback since Matcha's LuaVM
+--// may not resolve LocalPlayer instance references correctly.
 --// ─────────────────────────────────────────────
 local userTycoon = (function()
+    local localName = LocalPlayer and LocalPlayer.Name
     for _, v in pairs(workspace:GetChildren()) do
-        if v:IsA("Folder") and v.Name:match("Tycoon%d") then
-            if v:FindFirstChild("Owner") and v.Owner.Value == LocalPlayer then
-                return v
+        if v.Name:match("Tycoon%d") then
+            local owner = v:FindFirstChild("Owner")
+            if owner then
+                -- try instance equality first, then name string comparison
+                local ok1 = pcall(function()
+                    if owner.Value == LocalPlayer then
+                        userTycoon = v
+                    end
+                end)
+                if userTycoon then return userTycoon end
+                -- fallback: compare by display name string
+                local ownerVal = owner.Value
+                if ownerVal and localName and tostring(ownerVal) == localName then
+                    return v
+                end
+                -- fallback 2: compare .Name property directly
+                if ownerVal and ownerVal.Name and ownerVal.Name == localName then
+                    return v
+                end
             end
         end
     end
@@ -20,7 +39,35 @@ end)()
 
 if not userTycoon then
     notify("Tycoon not found! Re-run after joining a plot.", "Sell Lemons", 5)
-    return
+    -- Don't hard-return — keep trying in background so player doesn't need to re-run
+    task.spawn(function()
+        local attempts = 0
+        while not userTycoon and attempts < 30 do
+            task.wait(2)
+            attempts += 1
+            local localName = LocalPlayer and LocalPlayer.Name
+            for _, v in pairs(workspace:GetChildren()) do
+                if v.Name:match("Tycoon%d") then
+                    local owner = v:FindFirstChild("Owner")
+                    if owner then
+                        local ownerVal = owner.Value
+                        if ownerVal and localName and (
+                            (pcall(function() return ownerVal == LocalPlayer end) and ownerVal == LocalPlayer)
+                            or tostring(ownerVal) == localName
+                            or (ownerVal.Name and ownerVal.Name == localName)
+                        ) then
+                            userTycoon = v
+                            notify("Tycoon found: " .. v.Name .. "!", "Sell Lemons", 3)
+                            break
+                        end
+                    end
+                end
+            end
+        end
+        if not userTycoon then
+            notify("Still no tycoon after retries. Check your plot.", "Sell Lemons", 5)
+        end
+    end)
 end
 
 --// ─────────────────────────────────────────────
@@ -39,6 +86,7 @@ local stats = { buys = 0, upgrades = 0, fruit = 0, rebirths = 0, evolves = 0 }
 --// AUTO BUY
 --// ─────────────────────────────────────────────
 local function buyAllAffordable()
+    if not userTycoon then return end
     for _, obj in ipairs(userTycoon.Purchases:GetDescendants()) do
         if obj:IsA("Model") then
             local shown     = obj:GetAttribute("Shown")
@@ -71,6 +119,7 @@ local lastUpgradeScan = 0
 local function refreshUpgradeRemotes()
     upgradeRemotes = {}
     upgradeLevel   = {}
+    if not userTycoon then return end
     local purchases = userTycoon:FindFirstChild("Purchases")
     if not purchases then return end
     for _, obj in ipairs(purchases:GetDescendants()) do
@@ -108,6 +157,7 @@ end)
 --// AUTO POWER LEVEL
 --// ─────────────────────────────────────────────
 local function getPowerLevelRemote()
+    if not userTycoon then return nil end
     local remotes = userTycoon:FindFirstChild("Remotes")
     return remotes and remotes:FindFirstChild("UpgradePowerLevel")
 end
@@ -132,10 +182,12 @@ local RebirthTimeout      = 8
 local rebirthBusy         = false
 
 local function getRebirthRemote()
+    if not userTycoon then return nil end
     local remotes = userTycoon:FindFirstChild("Remotes")
     return remotes and remotes:FindFirstChild("Rebirth")
 end
 local function getRebirthedSignal()
+    if not userTycoon then return nil end
     local remotes = userTycoon:FindFirstChild("Remotes")
     return remotes and remotes:FindFirstChild("Rebirthed")
 end
@@ -211,10 +263,12 @@ local EvolveTimeout  = 8
 local evolveBusy     = false
 
 local function getEvolveRemote()
+    if not userTycoon then return nil end
     local remotes = userTycoon:FindFirstChild("Remotes")
     return remotes and remotes:FindFirstChild("Evolve")
 end
 local function getEvolvedSignal()
+    if not userTycoon then return nil end
     local remotes = userTycoon:FindFirstChild("Remotes")
     return remotes and remotes:FindFirstChild("Evolved")
 end
