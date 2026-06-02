@@ -1,13 +1,8 @@
---// SellLemons Autofarm — MatchaUI port
---// Original logic by Claude, UI ported to MatchaUI by Claude
-
--- Load MatchaUI
-local MatchaUI = loadstring(game:HttpGet(
-    "https://raw.githubusercontent.com/shystemcito/ForMatcha/main/Libs/MatchaUI.luau"
-))()
+--// SellLemons Autofarm — Matcha UI (UI.AddTab API)
+--// Logic ported from Rayfield original
 
 --// Services
-local Players    = game:GetService("Players")
+local Players     = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
 --// ─────────────────────────────────────────────
@@ -23,27 +18,8 @@ local userTycoon = (function()
     end
 end)()
 
---// ─────────────────────────────────────────────
---// Window + Tabs
---// ─────────────────────────────────────────────
-local Window = MatchaUI.CreateWindow({
-    Title  = "Sell Lemons",
-    Width  = 520,
-    Height = 400,
-    X      = 120,
-    Y      = 80,
-})
-
-local MainCat   = Window:AddCategory("Main")
-local SewerCat  = Window:AddCategory("Sewer")
-local StatusCat = Window:AddCategory("Status")
-
---// ─────────────────────────────────────────────
---// Guard: no tycoon found
---// ─────────────────────────────────────────────
 if not userTycoon then
-    MainCat:AddSection("⚠ Tycoon not found — re-run after joining a tycoon plot")
-    notify("Tycoon not found!", "Sell Lemons", 5)
+    notify("Tycoon not found! Re-run after joining a plot.", "Sell Lemons", 5)
     return
 end
 
@@ -326,7 +302,6 @@ local function doSewerRun()
             touchPart(hrp, o)
         end
     end
-
     for _, folderName in ipairs({ "CashVine", "SewerAlien" }) do
         local folder = sewer:FindFirstChild(folderName)
         if folder then
@@ -338,7 +313,6 @@ local function doSewerRun()
         end
     end
     task.wait(0.3)
-
     local cashVine = sewer:FindFirstChild("CashVine")
     if cashVine then
         local vineDoor = cashVine:FindFirstChild("VineDoor")
@@ -349,7 +323,6 @@ local function doSewerRun()
         end
     end
     task.wait(0.3)
-
     if cashVine then
         local vineModel = cashVine:FindFirstChild("CashVine")
         if vineModel then
@@ -403,7 +376,6 @@ local function collectFruit(tree)
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
     hrp.CFrame = tree:GetPivot() + Vector3.new(0, 5, 0)
-
     for _, obj in ipairs(tree:GetDescendants()) do
         if obj:IsA("BasePart") and obj.Name == "Fruit" then
             obj.CanCollide = false
@@ -435,117 +407,119 @@ task.spawn(function()
 end)
 
 --// ─────────────────────────────────────────────
---// UI — MAIN TAB
+--// LIVE STATUS — updates Text widgets each tick
 --// ─────────────────────────────────────────────
-MainCat:AddSection("Automation")
-
-MainCat:AddToggle("Auto Buy", false, function(val)
-    AutoBuy = val
-    notify(val and "Auto Buy enabled" or "Auto Buy disabled", "Sell Lemons", 3)
-end)
-
-MainCat:AddToggle("Auto Upgrade", false, function(val)
-    AutoUpgrade = val
-    notify(val and "Auto Upgrade enabled" or "Auto Upgrade disabled", "Sell Lemons", 3)
-end)
-
-MainCat:AddToggle("Auto Fruit", false, function(val)
-    AutoFruit = val
-    notify(val and "Auto Fruit enabled" or "Auto Fruit disabled", "Sell Lemons", 3)
-end)
-
-MainCat:AddToggle("Auto Rebirth", false, function(val)
-    AutoRebirth = val
-    if val and not getRebirthRemote() then
-        notify("Rebirth remote not found in your tycoon!", "Auto Rebirth", 5)
-        return
-    end
-    notify(val and "Auto Rebirth enabled" or "Auto Rebirth disabled", "Sell Lemons", 3)
-end)
-
-MainCat:AddToggle("Auto Evolve (x10 income)", false, function(val)
-    AutoEvolve = val
-    if val and not getEvolveRemote() then
-        notify("Evolve remote not found in your tycoon!", "Auto Evolve", 5)
-        return
-    end
-    notify(val and "Auto Evolve enabled — fires at 100% progress" or "Auto Evolve disabled", "Sell Lemons", 3)
-end)
-
-MainCat:AddToggle("Auto Power Level", false, function(val)
-    AutoPowerLevel = val
-    notify(val and "Auto Power Level enabled" or "Auto Power Level disabled", "Sell Lemons", 3)
-end)
-
---// ─────────────────────────────────────────────
---// UI — SEWER TAB
---// ─────────────────────────────────────────────
-SewerCat:AddSection("Sewer Actions")
-
-SewerCat:AddButton("Pull All Levers", function()
-    local n = pullAllLevers()
-    notify(
-        n > 0 and ("Pulled " .. n .. " lever(s) + grabbed sewer keys") or "No levers found (sewer loaded?)",
-        "Pull All Levers",
-        4
-    )
-end)
-
-SewerCat:AddButton("Vine Harvest", function()
-    notify("Running sewer run...", "Vine Harvest", 2)
-    task.spawn(function()
-        local ok, err = doSewerRun()
-        notify(
-            ok and "Done! Levers pulled, keys grabbed, vine harvested."
-               or ("Failed: " .. tostring(err)),
-            "Vine Harvest",
-            5
-        )
-    end)
-end)
-
-SewerCat:AddButton("Teleport to Sewer Alien", function()
-    local ok, err = teleportToAlien()
-    notify(
-        ok and "Teleported to the sewer alien (UFO)" or ("Failed: " .. tostring(err)),
-        "Sewer Alien",
-        3
-    )
-end)
-
---// ─────────────────────────────────────────────
---// UI — STATUS TAB (live counters)
---// ─────────────────────────────────────────────
-StatusCat:AddSection("Live Counters")
-
-local buyLbl     = StatusCat:AddLabel("Buys: 0")
-local upgLbl     = StatusCat:AddLabel("Upgrades: 0")
-local fruitLbl   = StatusCat:AddLabel("Fruit: 0")
-local rebirthLbl = StatusCat:AddLabel("Rebirths: 0")
-local evolveLbl  = StatusCat:AddLabel("Evolves: 0")
-local cashLbl    = StatusCat:AddLabel("Cash: ?")
+local statusWidgets = {}  -- filled after UI builds
 
 task.spawn(function()
     while true do
         task.wait(0.5)
+        if not statusWidgets.ready then continue end
 
         local cashStr = "?"
         local ls = LocalPlayer:FindFirstChild("leaderstats")
         local c  = ls and ls:FindFirstChild("Cash")
         if c then cashStr = tostring(c.Value) end
 
-        local function flag(b) return b and " [ON]" or " [off]" end
+        local function flag(b) return b and "  ON" or "  off" end
 
-        if buyLbl     and buyLbl.SetText     then buyLbl:SetText("Buys: "     .. stats.buys     .. flag(AutoBuy))        end
-        if upgLbl     and upgLbl.SetText     then upgLbl:SetText("Upgrades: " .. stats.upgrades .. flag(AutoUpgrade))    end
-        if fruitLbl   and fruitLbl.SetText   then fruitLbl:SetText("Fruit: "  .. stats.fruit    .. flag(AutoFruit))      end
-        if rebirthLbl and rebirthLbl.SetText then rebirthLbl:SetText("Rebirths: " .. stats.rebirths .. flag(AutoRebirth)) end
-        if evolveLbl  and evolveLbl.SetText  then evolveLbl:SetText("Evolves: "  .. stats.evolves  .. flag(AutoEvolve))  end
-        if cashLbl    and cashLbl.SetText    then cashLbl:SetText("Cash: " .. cashStr)                                    end
+        pcall(function() statusWidgets.cash:SetValue("Cash: " .. cashStr) end)
+        pcall(function() statusWidgets.buys:SetValue("Buys: "     .. stats.buys     .. flag(AutoBuy))        end)
+        pcall(function() statusWidgets.upgr:SetValue("Upgrades: " .. stats.upgrades .. flag(AutoUpgrade))    end)
+        pcall(function() statusWidgets.fruit:SetValue("Fruit: "   .. stats.fruit    .. flag(AutoFruit))      end)
+        pcall(function() statusWidgets.reb:SetValue("Rebirths: "  .. stats.rebirths .. flag(AutoRebirth))    end)
+        pcall(function() statusWidgets.evo:SetValue("Evolves: "   .. stats.evolves  .. flag(AutoEvolve))     end)
     end
 end)
 
 --// ─────────────────────────────────────────────
---// Loaded notification
+--// UI — Matcha UI.AddTab API
 --// ─────────────────────────────────────────────
-notify("Autofarm loaded successfully", "Sell Lemons", 5)
+UI.AddTab("Sell Lemons", function(tab)
+
+    -- ── Left column ───────────────────────────
+    local auto = tab:Section("Automation", "Left")
+
+    auto:Toggle("auto_buy", "Auto Buy", false, function(val)
+        AutoBuy = val
+        notify(val and "Auto Buy enabled" or "Auto Buy disabled", "Sell Lemons", 3)
+    end)
+
+    auto:Toggle("auto_upgrade", "Auto Upgrade", false, function(val)
+        AutoUpgrade = val
+        notify(val and "Auto Upgrade enabled" or "Auto Upgrade disabled", "Sell Lemons", 3)
+    end)
+
+    auto:Toggle("auto_fruit", "Auto Fruit", false, function(val)
+        AutoFruit = val
+        notify(val and "Auto Fruit enabled" or "Auto Fruit disabled", "Sell Lemons", 3)
+    end)
+
+    auto:Toggle("auto_rebirth", "Auto Rebirth", false, function(val)
+        AutoRebirth = val
+        if val and not getRebirthRemote() then
+            notify("Rebirth remote not found in your tycoon!", "Auto Rebirth", 5)
+            return
+        end
+        notify(val and "Auto Rebirth enabled" or "Auto Rebirth disabled", "Sell Lemons", 3)
+    end)
+
+    auto:Toggle("auto_evolve", "Auto Evolve (x10 income)", false, function(val)
+        AutoEvolve = val
+        if val and not getEvolveRemote() then
+            notify("Evolve remote not found in your tycoon!", "Auto Evolve", 5)
+            return
+        end
+        notify(val and "Auto Evolve enabled — fires at 100% progress" or "Auto Evolve disabled", "Sell Lemons", 3)
+    end)
+
+    auto:Toggle("auto_powerlevel", "Auto Power Level", false, function(val)
+        AutoPowerLevel = val
+        notify(val and "Auto Power Level enabled" or "Auto Power Level disabled", "Sell Lemons", 3)
+    end)
+
+    -- ── Sewer section (still Left column) ────
+    local sewer = tab:Section("Sewer", "Left")
+
+    sewer:Button("Pull All Levers", function()
+        local n = pullAllLevers()
+        notify(
+            n > 0 and ("Pulled " .. n .. " lever(s) + grabbed sewer keys") or "No levers found (sewer loaded?)",
+            "Pull All Levers", 4
+        )
+    end)
+
+    sewer:Button("Vine Harvest", function()
+        notify("Running sewer run...", "Vine Harvest", 2)
+        task.spawn(function()
+            local ok, err = doSewerRun()
+            notify(
+                ok and "Done! Levers pulled, keys grabbed, vine harvested."
+                   or ("Failed: " .. tostring(err)),
+                "Vine Harvest", 5
+            )
+        end)
+    end)
+
+    sewer:Button("Teleport to Sewer Alien", function()
+        local ok, err = teleportToAlien()
+        notify(
+            ok and "Teleported to the sewer alien (UFO)" or ("Failed: " .. tostring(err)),
+            "Sewer Alien", 3
+        )
+    end)
+
+    -- ── Right column — Live Status ─────────────
+    local status = tab:Section("Live Status", "Right")
+
+    statusWidgets.cash  = status:InputText("stat_cash",  "Cash",     "?")
+    statusWidgets.buys  = status:InputText("stat_buys",  "Buys",     "0")
+    statusWidgets.upgr  = status:InputText("stat_upgr",  "Upgrades", "0")
+    statusWidgets.fruit = status:InputText("stat_fruit", "Fruit",    "0")
+    statusWidgets.reb   = status:InputText("stat_reb",   "Rebirths", "0")
+    statusWidgets.evo   = status:InputText("stat_evo",   "Evolves",  "0")
+    statusWidgets.ready = true
+
+end)
+
+notify("Sell Lemons autofarm loaded!", "Sell Lemons", 5)
