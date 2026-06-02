@@ -1,22 +1,25 @@
---// SellLemons Autofarm — Matcha LuaVM compatible
---// Uses: spawn(), wait(), while loops — NO task.* NO :Connect() NO signals
+--// SellLemons Autofarm
+--// UI: catowice/p library (Matcha compatible)
 
+local Menu = loadstring(game:HttpGet('https://raw.githubusercontent.com/catowice/p/refs/heads/main/library.lua'))()
+
+--// Services
 local Players     = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
 --// ─────────────────────────────────────────────
---// Tycoon detection — name-based, no instance equality
+--// Tycoon detection
 --// ─────────────────────────────────────────────
 local userTycoon = nil
 
 local function findTycoon()
     local localName = LocalPlayer and LocalPlayer.Name
-    if not localName then return nil end
+    if not localName then return end
     for _, v in next, workspace:GetChildren() do
         if v.Name:match("Tycoon%d") then
             local owner = v:FindFirstChild("Owner")
             if owner and owner.Value then
-                local ok = pcall(function()
+                pcall(function()
                     if owner.Value.Name == localName then
                         userTycoon = v
                     end
@@ -25,7 +28,6 @@ local function findTycoon()
         end
         if userTycoon then break end
     end
-    return userTycoon
 end
 
 findTycoon()
@@ -43,7 +45,7 @@ local AutoPowerLevel = false
 local stats = { buys = 0, upgrades = 0, fruit = 0, rebirths = 0, evolves = 0 }
 
 --// ─────────────────────────────────────────────
---// AUTO BUY loop
+--// AUTO BUY
 --// ─────────────────────────────────────────────
 spawn(function()
     while true do
@@ -69,7 +71,7 @@ spawn(function()
 end)
 
 --// ─────────────────────────────────────────────
---// AUTO UPGRADE loop
+--// AUTO UPGRADE
 --// ─────────────────────────────────────────────
 local upgradeRemotes  = {}
 local upgradeLevel    = {}
@@ -113,7 +115,7 @@ spawn(function()
 end)
 
 --// ─────────────────────────────────────────────
---// AUTO POWER LEVEL loop
+--// AUTO POWER LEVEL
 --// ─────────────────────────────────────────────
 spawn(function()
     while true do
@@ -129,7 +131,7 @@ spawn(function()
 end)
 
 --// ─────────────────────────────────────────────
---// NUMBER PARSER (for rebirth investor counts)
+--// NUMBER PARSER
 --// ─────────────────────────────────────────────
 local NUM_SCALE = {
     thousand=1e3, million=1e6, billion=1e9, trillion=1e12,
@@ -163,12 +165,11 @@ local function getCurrentInvestors()   return readQuantity("Amount")   or 0 end
 local function getPotentialInvestors() return readQuantity("Potential")      end
 
 --// ─────────────────────────────────────────────
---// AUTO REBIRTH loop
+--// AUTO REBIRTH
 --// ─────────────────────────────────────────────
 local RebirthGainMultiple = 1.0
 local MinPotential        = 1
 local RebirthCooldown     = 2
-local RebirthTimeout      = 8
 local rebirthBusy         = false
 
 spawn(function()
@@ -196,7 +197,7 @@ spawn(function()
 end)
 
 --// ─────────────────────────────────────────────
---// AUTO EVOLVE loop
+--// AUTO EVOLVE
 --// ─────────────────────────────────────────────
 local EvolveAt       = 100
 local EvolveCooldown = 2
@@ -228,6 +229,46 @@ spawn(function()
 end)
 
 --// ─────────────────────────────────────────────
+--// AUTO FRUIT
+--// ─────────────────────────────────────────────
+spawn(function()
+    while true do
+        wait(0.1)
+        if AutoFruit then
+            for _, tree in next, workspace:GetDescendants() do
+                if not AutoFruit then break end
+                if tree:IsA("Model") and tree.Name == "LemonTree" and tree.Parent then
+                    pcall(function()
+                        for _, obj in next, tree:GetDescendants() do
+                            if obj:IsA("BasePart") then obj.CanCollide = false end
+                        end
+                        local char = LocalPlayer.Character
+                        if not char then return end
+                        local hrp = char:FindFirstChild("HumanoidRootPart")
+                        if not hrp then return end
+                        hrp.CFrame = tree:GetPivot() + Vector3.new(0, 5, 0)
+                        for _, obj in next, tree:GetDescendants() do
+                            if obj:IsA("BasePart") and obj.Name == "Fruit" then
+                                obj.CanCollide = false
+                                local cp = obj:FindFirstChild("ClickPart")
+                                if cp then
+                                    local det = cp:FindFirstChildOfClass("ClickDetector")
+                                    if det then
+                                        wait(0.45)
+                                        pcall(function() fireclickdetector(det) end)
+                                        stats.fruit = stats.fruit + 1
+                                    end
+                                end
+                            end
+                        end
+                    end)
+                end
+            end
+        end
+    end
+end)
+
+--// ─────────────────────────────────────────────
 --// SEWER UTILS
 --// ─────────────────────────────────────────────
 local function touchPart(hrp, part)
@@ -241,14 +282,12 @@ local function pullAllLevers()
     local char = LocalPlayer.Character
     local hrp  = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return 0 end
-    local map   = workspace:FindFirstChild("Map")
-    local sewer = map and map:FindFirstChild("Sewer")
+    local sewer = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Sewer")
     local root  = sewer or workspace
     local pulled = 0
     for _, o in next, root:GetDescendants() do
         if o:IsA("BasePart") and string.find(string.lower(o.Name), "lever", 1, true) then
-            touchPart(hrp, o)
-            pulled = pulled + 1
+            touchPart(hrp, o); pulled = pulled + 1
         end
     end
     if sewer then
@@ -265,17 +304,15 @@ local function doSewerRun()
     local char = LocalPlayer.Character
     local hrp  = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return false, "no character" end
-    local map   = workspace:FindFirstChild("Map")
-    local sewer = map and map:FindFirstChild("Sewer")
+    local sewer = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Sewer")
     if not sewer then return false, "sewer not loaded" end
-
     for _, o in next, sewer:GetDescendants() do
         if o:IsA("BasePart") and string.find(string.lower(o.Name), "lever", 1, true) then
             touchPart(hrp, o)
         end
     end
-    for _, folderName in next, { "CashVine", "SewerAlien" } do
-        local folder = sewer:FindFirstChild(folderName)
+    for _, fn in next, {"CashVine","SewerAlien"} do
+        local folder = sewer:FindFirstChild(fn)
         if folder then
             for _, o in next, folder:GetDescendants() do
                 if o:IsA("BasePart") and (o.Name == "VineKey" or o.Name == "UFOKey") then
@@ -287,21 +324,18 @@ local function doSewerRun()
     wait(0.3)
     local cashVine = sewer:FindFirstChild("CashVine")
     if cashVine then
-        local vineDoor = cashVine:FindFirstChild("VineDoor")
-        if vineDoor then
-            for _, o in next, vineDoor:GetDescendants() do
+        local door = cashVine:FindFirstChild("VineDoor")
+        if door then
+            for _, o in next, door:GetDescendants() do
                 if o:IsA("BasePart") then touchPart(hrp, o) end
             end
         end
-    end
-    wait(0.3)
-    if cashVine then
-        local vineModel = cashVine:FindFirstChild("CashVine")
-        if vineModel then
-            local pivot = vineModel:GetPivot()
-            pcall(function() hrp.CFrame = pivot + Vector3.new(0, 3, 0) end)
+        wait(0.3)
+        local vm = cashVine:FindFirstChild("CashVine")
+        if vm then
+            pcall(function() hrp.CFrame = vm:GetPivot() + Vector3.new(0,3,0) end)
             wait(0.2)
-            for _, o in next, vineModel:GetDescendants() do
+            for _, o in next, vm:GetDescendants() do
                 if o:IsA("BasePart") then touchPart(hrp, o) end
             end
         end
@@ -309,203 +343,139 @@ local function doSewerRun()
     return true
 end
 
-local SEWER_ALIEN_POS = Vector3.new(-42, -41, 180)
 local function teleportToAlien()
     local char = LocalPlayer.Character
     local hrp  = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return false, "no character" end
-    pcall(function() hrp.CFrame = CFrame.new(SEWER_ALIEN_POS) end)
+    pcall(function() hrp.CFrame = CFrame.new(-42, -41, 180) end)
     return true
 end
 
 --// ─────────────────────────────────────────────
---// AUTO FRUIT — polls tree list each tick, no :Connect()
+--// Tycoon retry if not found on load
 --// ─────────────────────────────────────────────
-local function getLemonTrees()
-    local trees = {}
-    for _, v in next, workspace:GetDescendants() do
-        if v:IsA("Model") and v.Name == "LemonTree" and v.Parent then
-            trees[#trees + 1] = v
+if not userTycoon then
+    Menu:Notification("Tycoon not found — retrying...", 4)
+    spawn(function()
+        local attempts = 0
+        while not userTycoon and attempts < 30 do
+            wait(2); attempts = attempts + 1
+            findTycoon()
         end
-    end
-    return trees
+        if userTycoon then
+            Menu:Notification("Tycoon found: " .. userTycoon.Name, 3)
+        else
+            Menu:Notification("Tycoon not found after retries.", 5)
+        end
+    end)
 end
 
-spawn(function()
-    while true do
-        wait(0.1)
-        if AutoFruit then
-            local trees = getLemonTrees()
-            for _, tree in next, trees do
-                if not AutoFruit then break end
-                if tree and tree.Parent then
-                    pcall(function()
-                        -- disable collision on all parts
-                        for _, obj in next, tree:GetDescendants() do
-                            if obj:IsA("BasePart") then obj.CanCollide = false end
-                        end
-                        local char = LocalPlayer.Character
-                        if not char then return end
-                        local hrp = char:FindFirstChild("HumanoidRootPart")
-                        if not hrp then return end
-                        hrp.CFrame = tree:GetPivot() + Vector3.new(0, 5, 0)
-                        -- click all fruit detectors
-                        for _, obj in next, tree:GetDescendants() do
-                            if obj:IsA("BasePart") and obj.Name == "Fruit" then
-                                obj.CanCollide = false
-                                local clickPart = obj:FindFirstChild("ClickPart")
-                                if clickPart then
-                                    local detector = clickPart:FindFirstChildOfClass("ClickDetector")
-                                    if detector then
-                                        wait(0.45)
-                                        pcall(function() fireclickdetector(detector) end)
-                                        stats.fruit = stats.fruit + 1
-                                    end
-                                end
-                            end
-                        end
-                    end)
-                end
-            end
+--// ─────────────────────────────────────────────
+--// UI — catowice/p library
+--// ─────────────────────────────────────────────
+Menu:SetMenuTitle("Sell Lemons")
+
+local mainTab  = Menu:Tab("Main")
+local sewerTab = Menu:Tab("Sewer")
+local statsTab = Menu:Tab("Stats")
+
+-- ── Main tab ──────────────────────────────────
+local autoSec = mainTab:Section("Automation")
+
+autoSec:Toggle("Auto Buy", false, function(val)
+    AutoBuy = val
+end)
+
+autoSec:Toggle("Auto Upgrade", false, function(val)
+    AutoUpgrade = val
+end)
+
+autoSec:Toggle("Auto Fruit", false, function(val)
+    AutoFruit = val
+end)
+
+autoSec:Toggle("Auto Rebirth", false, function(val)
+    AutoRebirth = val
+    if val and userTycoon then
+        local remotes = userTycoon:FindFirstChild("Remotes")
+        if not (remotes and remotes:FindFirstChild("Rebirth")) then
+            Menu:Notification("Rebirth remote not found!", 5)
         end
     end
 end)
 
---// ─────────────────────────────────────────────
---// Tycoon retry loop — if not found on load, keep checking
---// ─────────────────────────────────────────────
-if not userTycoon then
-    notify("Tycoon not found — retrying in background", "Sell Lemons", 4)
+autoSec:Toggle("Auto Evolve (x10 income)", false, function(val)
+    AutoEvolve = val
+    if val and userTycoon then
+        local remotes = userTycoon:FindFirstChild("Remotes")
+        if not (remotes and remotes:FindFirstChild("Evolve")) then
+            Menu:Notification("Evolve remote not found!", 5)
+        end
+    end
+end)
+
+autoSec:Toggle("Auto Power Level", false, function(val)
+    AutoPowerLevel = val
+end)
+
+-- ── Sewer tab ─────────────────────────────────
+local sewerSec = sewerTab:Section("Sewer Actions")
+
+sewerSec:Button("Pull All Levers", function()
+    local n = pullAllLevers()
+    Menu:Notification(
+        n > 0 and ("Pulled " .. n .. " lever(s) + grabbed keys") or "No levers found",
+        4
+    )
+end)
+
+sewerSec:Button("Vine Harvest", function()
+    Menu:Notification("Running sewer run...", 2)
     spawn(function()
-        local attempts = 0
-        while not userTycoon and attempts < 30 do
-            wait(2)
-            attempts = attempts + 1
-            findTycoon()
-        end
-        if userTycoon then
-            notify("Tycoon found: " .. userTycoon.Name, "Sell Lemons", 3)
-        else
-            notify("Tycoon still not found after retries.", "Sell Lemons", 5)
-        end
-    end)
-end
-
---// ─────────────────────────────────────────────
---// UI — Matcha UI.AddTab API
---// ─────────────────────────────────────────────
-UI.AddTab("Sell Lemons", function(tab)
-
-    local auto = tab:Section("Automation", "Left")
-
-    auto:Toggle("auto_buy", "Auto Buy", false, function(val)
-        AutoBuy = val
-        notify(val and "Auto Buy ON" or "Auto Buy OFF", "Sell Lemons", 2)
-    end)
-
-    auto:Toggle("auto_upgrade", "Auto Upgrade", false, function(val)
-        AutoUpgrade = val
-        notify(val and "Auto Upgrade ON" or "Auto Upgrade OFF", "Sell Lemons", 2)
-    end)
-
-    auto:Toggle("auto_fruit", "Auto Fruit", false, function(val)
-        AutoFruit = val
-        notify(val and "Auto Fruit ON" or "Auto Fruit OFF", "Sell Lemons", 2)
-    end)
-
-    auto:Toggle("auto_rebirth", "Auto Rebirth", false, function(val)
-        AutoRebirth = val
-        if val and userTycoon then
-            local remotes = userTycoon:FindFirstChild("Remotes")
-            if not (remotes and remotes:FindFirstChild("Rebirth")) then
-                notify("Rebirth remote not found!", "Auto Rebirth", 5)
-                return
-            end
-        end
-        notify(val and "Auto Rebirth ON" or "Auto Rebirth OFF", "Sell Lemons", 2)
-    end)
-
-    auto:Toggle("auto_evolve", "Auto Evolve (x10 income)", false, function(val)
-        AutoEvolve = val
-        if val and userTycoon then
-            local remotes = userTycoon:FindFirstChild("Remotes")
-            if not (remotes and remotes:FindFirstChild("Evolve")) then
-                notify("Evolve remote not found!", "Auto Evolve", 5)
-                return
-            end
-        end
-        notify(val and "Auto Evolve ON — fires at 100% bar" or "Auto Evolve OFF", "Sell Lemons", 2)
-    end)
-
-    auto:Toggle("auto_powerlevel", "Auto Power Level", false, function(val)
-        AutoPowerLevel = val
-        notify(val and "Auto Power Level ON" or "Auto Power Level OFF", "Sell Lemons", 2)
-    end)
-
-    local sewer = tab:Section("Sewer", "Left")
-
-    sewer:Button("Pull All Levers", function()
-        local n = pullAllLevers()
-        notify(
-            n > 0 and ("Pulled " .. n .. " lever(s) + sewer keys grabbed") or "No levers found",
-            "Pull All Levers", 4
+        local ok, err = doSewerRun()
+        Menu:Notification(
+            ok and "Done! Levers pulled, vine harvested." or ("Failed: " .. tostring(err)),
+            5
         )
     end)
+end)
 
-    sewer:Button("Vine Harvest", function()
-        notify("Running...", "Vine Harvest", 2)
-        spawn(function()
-            local ok, err = doSewerRun()
-            notify(
-                ok and "Done! Levers pulled, vine harvested." or ("Failed: " .. tostring(err)),
-                "Vine Harvest", 5
-            )
-        end)
-    end)
+sewerSec:Button("Teleport to Sewer Alien", function()
+    local ok, err = teleportToAlien()
+    Menu:Notification(
+        ok and "Teleported to sewer alien!" or ("Failed: " .. tostring(err)),
+        3
+    )
+end)
 
-    sewer:Button("Teleport to Sewer Alien", function()
-        local ok, err = teleportToAlien()
-        notify(
-            ok and "Teleported to sewer alien!" or ("Failed: " .. tostring(err)),
-            "Sewer Alien", 3
-        )
-    end)
+-- ── Stats tab ─────────────────────────────────
+local statSec = statsTab:Section("Live Counters")
 
-    -- Right column: live stats displayed as read-only text
-    local status = tab:Section("Live Status", "Right")
+local tboxBuys  = statSec:Textbox("Buys",     "0",  function() end)
+local tboxUpgr  = statSec:Textbox("Upgrades", "0",  function() end)
+local tboxFruit = statSec:Textbox("Fruit",    "0",  function() end)
+local tboxReb   = statSec:Textbox("Rebirths", "0",  function() end)
+local tboxEvo   = statSec:Textbox("Evolves",  "0",  function() end)
+local tboxCash  = statSec:Textbox("Cash",     "?",  function() end)
 
-    status:Text("Stats update every 0.5s")
-    status:Spacing()
-
-    local wCash  = status:InputText("s_cash",  "Cash",      "?")
-    local wBuys  = status:InputText("s_buys",  "Buys",      "0")
-    local wUpgr  = status:InputText("s_upgr",  "Upgrades",  "0")
-    local wFruit = status:InputText("s_fruit", "Fruit",     "0")
-    local wReb   = status:InputText("s_reb",   "Rebirths",  "0")
-    local wEvo   = status:InputText("s_evo",   "Evolves",   "0")
-
-    -- Status updater loop (runs every render inside AddTab's fn callback)
-    -- AddTab fn runs every frame, so we throttle with a timer
-    local lastUpdate = 0
-    return function()
-        local now = tick()
-        if now - lastUpdate < 0.5 then return end
-        lastUpdate = now
-
+-- Stats updater loop
+spawn(function()
+    while true do
+        wait(0.5)
         local cashStr = "?"
         local ls = LocalPlayer:FindFirstChild("leaderstats")
         local c  = ls and ls:FindFirstChild("Cash")
         if c then cashStr = tostring(c.Value) end
 
-        local function flag(b) return b and " [ON]" or " [off]" end
+        local function flag(b) return b and " ON" or " off" end
 
-        pcall(function() wCash:SetValue(cashStr) end)
-        pcall(function() wBuys:SetValue(stats.buys  .. flag(AutoBuy)) end)
-        pcall(function() wUpgr:SetValue(stats.upgrades .. flag(AutoUpgrade)) end)
-        pcall(function() wFruit:SetValue(stats.fruit .. flag(AutoFruit)) end)
-        pcall(function() wReb:SetValue(stats.rebirths .. flag(AutoRebirth)) end)
-        pcall(function() wEvo:SetValue(stats.evolves  .. flag(AutoEvolve)) end)
+        pcall(function() tboxBuys:Set(stats.buys  .. flag(AutoBuy))        end)
+        pcall(function() tboxUpgr:Set(stats.upgrades .. flag(AutoUpgrade)) end)
+        pcall(function() tboxFruit:Set(stats.fruit .. flag(AutoFruit))     end)
+        pcall(function() tboxReb:Set(stats.rebirths .. flag(AutoRebirth))  end)
+        pcall(function() tboxEvo:Set(stats.evolves  .. flag(AutoEvolve))   end)
+        pcall(function() tboxCash:Set(cashStr)                             end)
     end
 end)
 
-notify("Sell Lemons autofarm loaded!", "Sell Lemons", 5)
+Menu:Notification("Sell Lemons loaded!", 4)
