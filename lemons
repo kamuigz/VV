@@ -79,9 +79,21 @@ end
 
 --// AUTO BUY
 -- Pure teleport mode. No remotes: scans local player's tycoon -> Purchases -> buttons folders.
+-- Filters by affordability so it buys the $1 starter button before expensive future buttons.
 local buyQueue = {}
 local buyIndex = 1
 local lastBuyScan = 0
+
+local AUTO_NUM_SCALE = {
+    thousand=1e3, million=1e6, billion=1e9, trillion=1e12,
+    quadrillion=1e15, quintillion=1e18, sextillion=1e21, septillion=1e24,
+    octillion=1e27, nonillion=1e30, decillion=1e33, undecillion=1e36,
+    duodecillion=1e39, tredecillion=1e42, quattuordecillion=1e45,
+    quindecillion=1e48, sexdecillion=1e51, septendecillion=1e54,
+    octodecillion=1e57, novemdecillion=1e60, vigintillion=1e63,
+    k=1e3, m=1e6, b=1e9, t=1e12, qd=1e15, qn=1e18,
+    sx=1e21, sp=1e24, oc=1e27, no=1e30, dc=1e33,
+}
 
 local function getHRP()
     local char = LocalPlayer.Character
@@ -98,6 +110,44 @@ end
 
 local function lowerName(obj)
     return string.lower(tostring(obj and obj.Name or ""))
+end
+
+local function parseAutoNumber(value)
+    if value == nil then return nil end
+    if type(value) == "number" then return value end
+
+    local text = tostring(value):gsub(",", ""):lower()
+    text = text:gsub("%$", "")
+    local compact = text:gsub("%s+", "")
+
+    local num, suffix = compact:match("([%d%.]+)([a-z]+)")
+    if not num then
+        num = compact:match("[%d%.]+")
+    end
+
+    local amount = num and tonumber(num)
+    if not amount then return nil end
+
+    if suffix and AUTO_NUM_SCALE[suffix] then
+        return amount * AUTO_NUM_SCALE[suffix]
+    end
+
+    for word, scale in next, AUTO_NUM_SCALE do
+        if #word > 1 and string.find(text, word, 1, true) then
+            return amount * scale
+        end
+    end
+
+    return amount
+end
+
+local function getCashValue()
+    local leaderstats = LocalPlayer and LocalPlayer:FindFirstChild("leaderstats")
+    local cash = leaderstats and leaderstats:FindFirstChild("Cash")
+    if cash then
+        return parseAutoNumber(cash.Value)
+    end
+    return nil
 end
 
 local function isButtonsFolder(obj)
@@ -183,6 +233,64 @@ local function getButtonParts(root)
     return parts
 end
 
+local function readObjectText(obj)
+    local text = nil
+    pcall(function()
+        if type(obj.Text) == "string" and obj.Text ~= "" then
+            text = obj.Text
+        end
+    end)
+    return text
+end
+
+local function getButtonCost(root)
+    if not root then return nil end
+
+    local attrNames = {"Price", "Cost", "Amount", "Cash", "Money", "Value", "RequiredCash"}
+    local cur = root
+    while cur and cur ~= userTycoon do
+        for _, attrName in next, attrNames do
+            local parsed = parseAutoNumber(safeAttr(cur, attrName))
+            if parsed then return parsed end
+        end
+        cur = cur.Parent
+    end
+
+    local texts = {}
+    local rootText = readObjectText(root)
+    if rootText then texts[#texts + 1] = rootText end
+
+    for _, obj in next, root:GetDescendants() do
+        local valueText = nil
+        pcall(function()
+            if obj.Value ~= nil then
+                valueText = tostring(obj.Value)
+            end
+        end)
+        if valueText then
+            local lname = lowerName(obj)
+            if string.find(lname, "price", 1, true)
+                or string.find(lname, "cost", 1, true)
+                or string.find(lname, "cash", 1, true)
+                or string.find(lname, "money", 1, true) then
+                local parsedValue = parseAutoNumber(valueText)
+                if parsedValue then return parsedValue end
+            end
+        end
+
+        local textValue = readObjectText(obj)
+        if textValue then
+            texts[#texts + 1] = textValue
+        end
+    end
+
+    if #texts > 0 then
+        return parseAutoNumber(table.concat(texts, " "))
+    end
+
+    return nil
+end
+
 local function isAvailableButtonRoot(root)
     if not root or not root.Parent then return false end
     if isPurchasedObject(root) then return false end
@@ -194,6 +302,20 @@ local function isAvailableButtonRoot(root)
 
     local parts = getButtonParts(root)
     return #parts > 0
+end
+
+local function queueCandidate(list, root, cashValue)
+    if not isAvailableButtonRoot(root) then return end
+
+    local cost = getButtonCost(root)
+    if cost and cashValue and cost > cashValue + 0.001 then
+        return
+    end
+
+    list[#list + 1] = {
+        root = root,
+        cost = cost or math.huge,
+    }
 end
 
 local function refreshBuyQueue()
@@ -209,15 +331,25 @@ local function refreshBuyQueue()
     local purchases = userTycoon:FindFirstChild("Purchases")
     if not purchases then return end
 
+    local cashValue = getCashValue()
+    local candidates = {}
+
     for _, obj in next, purchases:GetDescendants() do
         if isButtonsFolder(obj) then
             for _, buttonRoot in next, obj:GetChildren() do
-                if isAvailableButtonRoot(buttonRoot) then
-                    buyQueue[#buyQueue + 1] = buttonRoot
-                end
+                queueCandidate(candidates, buttonRoot, cashValue)
             end
         end
     end
+
+    table.sort(candidates, function(a, b)
+        if a.cost == b.cost then
+            return tostring(a.root.Name) < tostring(b.root.Name)
+        end
+        return a.cost < b.cost
+    end)
+
+    buyQueue = candidates
 end
 
 local function standOnPart(part, holdSeconds)
@@ -261,11 +393,15 @@ end
 local function buyButtonByTeleport(buttonRoot)
     if not isAvailableButtonRoot(buttonRoot) then return false end
 
+    local cost = getButtonCost(buttonRoot)
+    local cashValue = getCashValue()
+    if cost and cashValue and cost > cashValue + 0.001 then
+        return false
+    end
+
     local parts = getButtonParts(buttonRoot)
     if #parts == 0 then return false end
 
-    -- Try the strongest candidates first, but touch a few parts in the same button model
-    -- because some tycoons put the touch interest on an invisible hitbox or base part.
     local maxParts = math.min(#parts, 4)
     for i = 1, maxParts do
         if not isAutoActive("AutoBuy") then break end
@@ -282,11 +418,11 @@ local function autoBuyPass()
         refreshBuyQueue()
     end
 
-    local buttonRoot = buyQueue[buyIndex]
+    local item = buyQueue[buyIndex]
     buyIndex = buyIndex + 1
-    if not buttonRoot then return end
+    if not item then return end
 
-    buyButtonByTeleport(buttonRoot)
+    buyButtonByTeleport(item.root)
     wait(0.25)
 end
 --// AUTO UPGRADE
