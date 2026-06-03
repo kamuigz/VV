@@ -1,8 +1,13 @@
 --// SellLemons Autofarm
 --// UI: catowice/p library (Matcha compatible)
 
-loadstring(game:HttpGet('https://raw.githubusercontent.com/catowice/p/refs/heads/main/library.lua'))()
-local Menu = UILib
+local Menu = loadstring(game:HttpGet('https://raw.githubusercontent.com/catowice/p/refs/heads/main/library.lua'))()
+if not Menu then
+    Menu = UILib
+end
+if not Menu then
+    error("UILib failed to load: Menu is nil")
+end
 
 --// Services
 local Players     = game:GetService("Players")
@@ -480,3 +485,12 @@ spawn(function()
 end)
 
 Menu:Notification("Sell Lemons loaded!", 4)
+
+spawn(function()
+    while true do
+        pcall(function()
+            Menu:Step()
+        end)
+        wait()
+    end
+end)
