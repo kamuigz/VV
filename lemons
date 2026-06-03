@@ -39,56 +39,86 @@ end
 findTycoon()
 
 --// ─────────────────────────────────────────────
---// State flags
---// ─────────────────────────────────────────────
-local AutoBuy        = false
-local AutoUpgrade    = false
-local AutoFruit      = false
-local AutoRebirth    = false
-local AutoEvolve     = false
-local AutoPowerLevel = false
-
+--// Automation workers
+--// Loops are created only after their toggle is enabled, then cancelled on disable.
 local stats = { buys = 0, upgrades = 0, fruit = 0, rebirths = 0, evolves = 0 }
 
---// ─────────────────────────────────────────────
+local autoTokens = {}
+local activeAutos = {}
+
+local function isAutoActive(name)
+    return activeAutos[name] == true
+end
+
+local function stopAuto(name)
+    autoTokens[name] = (autoTokens[name] or 0) + 1
+    activeAutos[name] = false
+end
+
+local function startAuto(name, delaySeconds, callback)
+    stopAuto(name)
+    autoTokens[name] = (autoTokens[name] or 0) + 1
+    local token = autoTokens[name]
+    activeAutos[name] = true
+
+    spawn(function()
+        while activeAutos[name] == true and autoTokens[name] == token do
+            pcall(callback)
+            wait(delaySeconds)
+        end
+    end)
+end
+
+local function setAuto(name, enabled, delaySeconds, callback)
+    if enabled then
+        startAuto(name, delaySeconds, callback)
+    else
+        stopAuto(name)
+    end
+end
+
 --// AUTO BUY
---// ─────────────────────────────────────────────
-spawn(function()
-    while true do
-        wait(0.05)
-        if AutoBuy and userTycoon then
-            pcall(function()
-                for _, obj in next, userTycoon.Purchases:GetDescendants() do
-                    if obj:IsA("Model") then
-                        local shown     = obj:GetAttribute("Shown")
-                        local purchased = obj:GetAttribute("Purchased")
-                        if shown == true and purchased ~= true then
-                            local purchase = obj:FindFirstChild("Purchase")
-                            if purchase and purchase:IsA("RemoteFunction") then
-                                pcall(function() purchase:InvokeServer() end)
-                                stats.buys = stats.buys + 1
-                            end
-                        end
+local function autoBuyPass()
+    if not userTycoon then
+        findTycoon()
+        return
+    end
+
+    local purchases = userTycoon:FindFirstChild("Purchases")
+    if not purchases then return end
+
+    for _, obj in next, purchases:GetDescendants() do
+        if obj:IsA("Model") then
+            local shown = obj:GetAttribute("Shown")
+            local purchased = obj:GetAttribute("Purchased")
+            if shown == true and purchased ~= true then
+                local purchase = obj:FindFirstChild("Purchase")
+                if purchase and purchase:IsA("RemoteFunction") then
+                    local ok = pcall(function()
+                        purchase:InvokeServer()
+                    end)
+                    if ok then
+                        stats.buys = stats.buys + 1
                     end
                 end
-            end)
+            end
         end
     end
-end)
+end
 
---// ─────────────────────────────────────────────
 --// AUTO UPGRADE
---// ─────────────────────────────────────────────
-local upgradeRemotes  = {}
-local upgradeLevel    = {}
+local upgradeRemotes = {}
+local upgradeLevel = {}
 local lastUpgradeScan = 0
 
 local function refreshUpgradeRemotes()
     upgradeRemotes = {}
-    upgradeLevel   = {}
+    upgradeLevel = {}
     if not userTycoon then return end
+
     local purchases = userTycoon:FindFirstChild("Purchases")
     if not purchases then return end
+
     for _, obj in next, purchases:GetDescendants() do
         if obj:IsA("RemoteFunction") and obj.Name == "Upgrade" then
             upgradeRemotes[#upgradeRemotes + 1] = obj
@@ -96,49 +126,50 @@ local function refreshUpgradeRemotes()
     end
 end
 
-spawn(function()
-    while true do
-        wait(0.25)
-        if AutoUpgrade then
-            if tick() - lastUpgradeScan > 3 then
-                refreshUpgradeRemotes()
-                lastUpgradeScan = tick()
-            end
-            for _, remote in next, upgradeRemotes do
-                if remote.Parent then
-                    local lvl = (upgradeLevel[remote] or 0) + 1
-                    while lvl <= 100 do
-                        local ok, res = pcall(function() return remote:InvokeServer(lvl) end)
-                        if (not ok) or res == false then break end
-                        upgradeLevel[remote] = lvl
-                        stats.upgrades = stats.upgrades + 1
-                        lvl = lvl + 1
-                    end
-                end
+local function autoUpgradePass()
+    if not userTycoon then
+        findTycoon()
+        return
+    end
+
+    if tick() - lastUpgradeScan > 3 then
+        refreshUpgradeRemotes()
+        lastUpgradeScan = tick()
+    end
+
+    for _, remote in next, upgradeRemotes do
+        if remote.Parent then
+            local lvl = (upgradeLevel[remote] or 0) + 1
+            while lvl <= 100 do
+                local ok, res = pcall(function()
+                    return remote:InvokeServer(lvl)
+                end)
+                if (not ok) or res == false then break end
+                upgradeLevel[remote] = lvl
+                stats.upgrades = stats.upgrades + 1
+                lvl = lvl + 1
             end
         end
     end
-end)
+end
 
---// ─────────────────────────────────────────────
 --// AUTO POWER LEVEL
---// ─────────────────────────────────────────────
-spawn(function()
-    while true do
-        wait(0.25)
-        if AutoPowerLevel and userTycoon then
-            pcall(function()
-                local remotes = userTycoon:FindFirstChild("Remotes")
-                local remote  = remotes and remotes:FindFirstChild("UpgradePowerLevel")
-                if remote then remote:InvokeServer() end
-            end)
-        end
+local function autoPowerLevelPass()
+    if not userTycoon then
+        findTycoon()
+        return
     end
-end)
 
---// ─────────────────────────────────────────────
+    local remotes = userTycoon:FindFirstChild("Remotes")
+    local remote = remotes and remotes:FindFirstChild("UpgradePowerLevel")
+    if remote then
+        pcall(function()
+            remote:InvokeServer()
+        end)
+    end
+end
+
 --// NUMBER PARSER
---// ─────────────────────────────────────────────
 local NUM_SCALE = {
     thousand=1e3, million=1e6, billion=1e9, trillion=1e12,
     quadrillion=1e15, quintillion=1e18, sextillion=1e21, septillion=1e24,
@@ -170,111 +201,135 @@ end
 local function getCurrentInvestors()   return readQuantity("Amount")   or 0 end
 local function getPotentialInvestors() return readQuantity("Potential")      end
 
---// ─────────────────────────────────────────────
 --// AUTO REBIRTH
---// ─────────────────────────────────────────────
 local RebirthGainMultiple = 1.0
-local MinPotential        = 1
-local RebirthCooldown     = 2
-local rebirthBusy         = false
+local MinPotential = 1
+local RebirthCooldown = 2
+local rebirthBusy = false
 
-spawn(function()
-    while true do
-        wait(0.5)
-        if AutoRebirth and not rebirthBusy and userTycoon then
-            pcall(function()
-                local remotes   = userTycoon:FindFirstChild("Remotes")
-                local remote    = remotes and remotes:FindFirstChild("Rebirth")
-                local potential = getPotentialInvestors()
-                local current   = getCurrentInvestors()
-                local worthIt   = remote and potential
-                    and potential >= MinPotential
-                    and potential >= current * RebirthGainMultiple
-                if worthIt then
-                    rebirthBusy = true
-                    remote:InvokeServer()
-                    stats.rebirths = stats.rebirths + 1
-                    wait(RebirthCooldown)
-                    rebirthBusy = false
-                end
-            end)
-        end
+local function autoRebirthPass()
+    if rebirthBusy then return end
+    if not userTycoon then
+        findTycoon()
+        return
     end
-end)
 
---// ─────────────────────────────────────────────
+    local remotes = userTycoon:FindFirstChild("Remotes")
+    local remote = remotes and remotes:FindFirstChild("Rebirth")
+    local potential = getPotentialInvestors()
+    local current = getCurrentInvestors()
+    local worthIt = remote and potential
+        and potential >= MinPotential
+        and potential >= current * RebirthGainMultiple
+
+    if worthIt then
+        rebirthBusy = true
+        local ok = pcall(function()
+            remote:InvokeServer()
+        end)
+        if ok then
+            stats.rebirths = stats.rebirths + 1
+        end
+        wait(RebirthCooldown)
+        rebirthBusy = false
+    end
+end
+
 --// AUTO EVOLVE
---// ─────────────────────────────────────────────
-local EvolveAt       = 100
+local EvolveAt = 100
 local EvolveCooldown = 2
-local evolveBusy     = false
+local evolveBusy = false
 
-spawn(function()
-    while true do
-        wait(0.5)
-        if AutoEvolve and not evolveBusy and userTycoon then
-            pcall(function()
-                local remotes  = userTycoon:FindFirstChild("Remotes")
-                local remote   = remotes and remotes:FindFirstChild("Evolve")
-                local pg       = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-                local r        = pg and pg:FindFirstChild("Rebirth")
-                local em       = r and r:FindFirstChild("EvolutionMenu")
-                local body     = em and em:FindFirstChild("Body")
-                local p        = body and body:FindFirstChild("Progress")
-                local progress = p and tonumber(tostring(p.Text):match("[%d%.]+"))
-                if remote and progress and progress >= EvolveAt then
-                    evolveBusy = true
-                    remote:InvokeServer()
-                    stats.evolves = stats.evolves + 1
-                    wait(EvolveCooldown)
-                    evolveBusy = false
-                end
-            end)
+local function autoEvolvePass()
+    if evolveBusy then return end
+    if not userTycoon then
+        findTycoon()
+        return
+    end
+
+    local remotes = userTycoon:FindFirstChild("Remotes")
+    local remote = remotes and remotes:FindFirstChild("Evolve")
+    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    local r = pg and pg:FindFirstChild("Rebirth")
+    local em = r and r:FindFirstChild("EvolutionMenu")
+    local body = em and em:FindFirstChild("Body")
+    local p = body and body:FindFirstChild("Progress")
+    local progress = p and tonumber(tostring(p.Text):match("[%d%.]+"))
+
+    if remote and progress and progress >= EvolveAt then
+        evolveBusy = true
+        local ok = pcall(function()
+            remote:InvokeServer()
+        end)
+        if ok then
+            stats.evolves = stats.evolves + 1
+        end
+        wait(EvolveCooldown)
+        evolveBusy = false
+    end
+end
+
+--// AUTO FRUIT
+local fruitTrees = {}
+local fruitIndex = 1
+local lastFruitScan = 0
+
+local function refreshFruitTrees()
+    fruitTrees = {}
+    for _, tree in next, workspace:GetDescendants() do
+        if tree:IsA("Model") and tree.Name == "LemonTree" and tree.Parent then
+            fruitTrees[#fruitTrees + 1] = tree
         end
     end
-end)
+    fruitIndex = 1
+    lastFruitScan = tick()
+end
 
---// ─────────────────────────────────────────────
---// AUTO FRUIT
---// ─────────────────────────────────────────────
-spawn(function()
-    while true do
-        wait(0.1)
-        if AutoFruit then
-            for _, tree in next, workspace:GetDescendants() do
-                if not AutoFruit then break end
-                if tree:IsA("Model") and tree.Name == "LemonTree" and tree.Parent then
-                    pcall(function()
-                        for _, obj in next, tree:GetDescendants() do
-                            if obj:IsA("BasePart") then obj.CanCollide = false end
-                        end
-                        local char = LocalPlayer.Character
-                        if not char then return end
-                        local hrp = char:FindFirstChild("HumanoidRootPart")
-                        if not hrp then return end
-                        hrp.CFrame = tree:GetPivot() + Vector3.new(0, 5, 0)
-                        for _, obj in next, tree:GetDescendants() do
-                            if obj:IsA("BasePart") and obj.Name == "Fruit" then
-                                obj.CanCollide = false
-                                local cp = obj:FindFirstChild("ClickPart")
-                                if cp then
-                                    local det = cp:FindFirstChildOfClass("ClickDetector")
-                                    if det then
-                                        wait(0.45)
-                                        pcall(function() fireclickdetector(det) end)
-                                        stats.fruit = stats.fruit + 1
-                                    end
-                                end
-                            end
-                        end
-                    end)
+local function collectFruitFromTree(tree)
+    if not (tree and tree.Parent) then return end
+
+    for _, obj in next, tree:GetDescendants() do
+        if obj:IsA("BasePart") then
+            obj.CanCollide = false
+        end
+    end
+
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    hrp.CFrame = tree:GetPivot() + Vector3.new(0, 5, 0)
+
+    for _, obj in next, tree:GetDescendants() do
+        if obj:IsA("BasePart") and obj.Name == "Fruit" then
+            obj.CanCollide = false
+            local cp = obj:FindFirstChild("ClickPart")
+            local det = cp and cp:FindFirstChildOfClass("ClickDetector")
+            if det then
+                wait(0.2)
+                local ok = pcall(function()
+                    fireclickdetector(det)
+                end)
+                if ok then
+                    stats.fruit = stats.fruit + 1
                 end
             end
         end
     end
-end)
+end
 
---// ─────────────────────────────────────────────
+local function autoFruitPass()
+    if tick() - lastFruitScan > 5 or fruitIndex > #fruitTrees then
+        refreshFruitTrees()
+    end
+
+    local tree = fruitTrees[fruitIndex]
+    fruitIndex = fruitIndex + 1
+    if tree then
+        collectFruitFromTree(tree)
+    end
+end
 --// SEWER UTILS
 --// ─────────────────────────────────────────────
 local function touchPart(hrp, part)
@@ -393,19 +448,19 @@ local miscTab  = Menu:Tab("Misc")
 local autoSec = mainTab:Section("Automation")
 
 autoSec:Toggle("Auto Buy", false, function(val)
-    AutoBuy = val
+    setAuto("AutoBuy", val, 0.25, autoBuyPass)
 end)
 
 autoSec:Toggle("Auto Upgrade", false, function(val)
-    AutoUpgrade = val
+    setAuto("AutoUpgrade", val, 0.5, autoUpgradePass)
 end)
 
 autoSec:Toggle("Auto Fruit", false, function(val)
-    AutoFruit = val
+    setAuto("AutoFruit", val, 0.4, autoFruitPass)
 end)
 
 autoSec:Toggle("Auto Rebirth", false, function(val)
-    AutoRebirth = val
+    setAuto("AutoRebirth", val, 0.5, autoRebirthPass)
     if val and userTycoon then
         local remotes = userTycoon:FindFirstChild("Remotes")
         if not (remotes and remotes:FindFirstChild("Rebirth")) then
@@ -415,7 +470,7 @@ autoSec:Toggle("Auto Rebirth", false, function(val)
 end)
 
 autoSec:Toggle("Auto Evolve (x10 income)", false, function(val)
-    AutoEvolve = val
+    setAuto("AutoEvolve", val, 0.5, autoEvolvePass)
     if val and userTycoon then
         local remotes = userTycoon:FindFirstChild("Remotes")
         if not (remotes and remotes:FindFirstChild("Evolve")) then
@@ -425,7 +480,7 @@ autoSec:Toggle("Auto Evolve (x10 income)", false, function(val)
 end)
 
 autoSec:Toggle("Auto Power Level", false, function(val)
-    AutoPowerLevel = val
+    setAuto("AutoPowerLevel", val, 0.75, autoPowerLevelPass)
 end)
 
 -- ── Sewer tab ─────────────────────────────────
@@ -497,23 +552,24 @@ local tboxCash  = statSec:Textbox("Cash",     "?",  function() end)
 -- Stats updater loop
 spawn(function()
     while true do
-        wait(0.5)
-        local cashStr = "?"
-        local ls = LocalPlayer:FindFirstChild("leaderstats")
-        local c  = ls and ls:FindFirstChild("Cash")
-        if c then cashStr = tostring(c.Value) end
+        wait(1)
+        if Menu._menu_open then
+            local cashStr = "?"
+            local ls = LocalPlayer:FindFirstChild("leaderstats")
+            local c  = ls and ls:FindFirstChild("Cash")
+            if c then cashStr = tostring(c.Value) end
 
-        local function flag(b) return b and " ON" or " off" end
+            local function flag(name) return isAutoActive(name) and " ON" or " off" end
 
-        pcall(function() tboxBuys:Set(stats.buys  .. flag(AutoBuy))        end)
-        pcall(function() tboxUpgr:Set(stats.upgrades .. flag(AutoUpgrade)) end)
-        pcall(function() tboxFruit:Set(stats.fruit .. flag(AutoFruit))     end)
-        pcall(function() tboxReb:Set(stats.rebirths .. flag(AutoRebirth))  end)
-        pcall(function() tboxEvo:Set(stats.evolves  .. flag(AutoEvolve))   end)
-        pcall(function() tboxCash:Set(cashStr)                             end)
+            pcall(function() tboxBuys:Set(stats.buys  .. flag("AutoBuy"))        end)
+            pcall(function() tboxUpgr:Set(stats.upgrades .. flag("AutoUpgrade")) end)
+            pcall(function() tboxFruit:Set(stats.fruit .. flag("AutoFruit"))     end)
+            pcall(function() tboxReb:Set(stats.rebirths .. flag("AutoRebirth"))  end)
+            pcall(function() tboxEvo:Set(stats.evolves  .. flag("AutoEvolve"))   end)
+            pcall(function() tboxCash:Set(cashStr)                                end)
+        end
     end
 end)
-
 Menu:Notification("Sell Lemons loaded! Press RightControl to open/close.", 4)
 
 spawn(function()
