@@ -380,10 +380,14 @@ end
 --// UI — catowice/p library
 --// ─────────────────────────────────────────────
 Menu:SetMenuTitle("Sell Lemons")
+Menu._overwrite_menu_key = true
+Menu._menu_key = "rctrl"
+Menu._menu_open = false
 
 local mainTab  = Menu:Tab("Main")
 local sewerTab = Menu:Tab("Sewer")
 local statsTab = Menu:Tab("Stats")
+local miscTab  = Menu:Tab("Misc")
 
 -- ── Main tab ──────────────────────────────────
 local autoSec = mainTab:Section("Automation")
@@ -454,6 +458,32 @@ sewerSec:Button("Teleport to Sewer Alien", function()
     )
 end)
 
+-- Misc tab
+local miscSec = miscTab:Section("Menu")
+
+local menuKeyToggle = miscSec:Toggle("Custom menu key", true, function(val)
+    Menu._overwrite_menu_key = val
+end)
+
+local menuKeyBind = menuKeyToggle:AddKeybind("rctrl", "Hold", true, function(newValue)
+    local keyName = Menu:_KeyIDToName(newValue)
+    if keyName then
+        Menu._menu_key = keyName
+        Menu:Notification("Menu key set to " .. keyName, 3)
+    end
+end)
+
+miscSec:Button("Use RightControl", function()
+    Menu._overwrite_menu_key = true
+    Menu._menu_key = "rctrl"
+    pcall(function() menuKeyToggle:Set(true) end)
+    pcall(function() menuKeyBind:Set("rctrl", "Hold") end)
+    Menu:Notification("Menu key set to RightControl", 3)
+end)
+
+miscSec:Button("Close Menu", function()
+    Menu._menu_open = false
+end)
 -- ── Stats tab ─────────────────────────────────
 local statSec = statsTab:Section("Live Counters")
 
@@ -484,7 +514,7 @@ spawn(function()
     end
 end)
 
-Menu:Notification("Sell Lemons loaded!", 4)
+Menu:Notification("Sell Lemons loaded! Press RightControl to open/close.", 4)
 
 spawn(function()
     while true do
