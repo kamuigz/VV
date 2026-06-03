@@ -188,6 +188,17 @@ local function isVisiblePart(part)
     return visible
 end
 
+local function isGreenBuyPart(part)
+    local green = false
+    pcall(function()
+        -- Affordable pads in this tycoon show as bright green. Expensive locked pads
+        -- are grey/orange, so color is a better Matcha-safe signal than hidden remotes.
+        local c = part.Color
+        green = c.G >= 0.65 and c.R <= 0.55 and c.B <= 0.55
+    end)
+    return green
+end
+
 local function scoreButtonPart(part)
     local name = lowerName(part)
     local score = 0
@@ -199,11 +210,9 @@ local function scoreButtonPart(part)
     if string.find(name, "touch", 1, true) then score = score + 80 end
     if string.find(name, "hitbox", 1, true) then score = score + 70 end
 
-    pcall(function()
-        if part.Color.G > 0.65 and part.Color.R < 0.55 then
-            score = score + 140
-        end
-    end)
+    if isGreenBuyPart(part) then
+        score = score + 1000
+    end
 
     pcall(function()
         score = score + math.min(part.Size.X * part.Size.Z, 60)
@@ -212,17 +221,21 @@ local function scoreButtonPart(part)
     return score
 end
 
-local function getButtonParts(root)
+local function getButtonParts(root, requireGreen)
     local parts = {}
     if not root then return parts end
 
     if root:IsA("BasePart") and isVisiblePart(root) then
-        parts[#parts + 1] = { part = root, score = scoreButtonPart(root) }
+        if (not requireGreen) or isGreenBuyPart(root) then
+            parts[#parts + 1] = { part = root, score = scoreButtonPart(root) }
+        end
     end
 
     for _, obj in next, root:GetDescendants() do
         if obj:IsA("BasePart") and isVisiblePart(obj) then
-            parts[#parts + 1] = { part = obj, score = scoreButtonPart(obj) }
+            if (not requireGreen) or isGreenBuyPart(obj) then
+                parts[#parts + 1] = { part = obj, score = scoreButtonPart(obj) }
+            end
         end
     end
 
@@ -300,7 +313,7 @@ local function isAvailableButtonRoot(root)
     local purchased = safeAttr(root, "Purchased")
     if shown == false or purchased == true then return false end
 
-    local parts = getButtonParts(root)
+    local parts = getButtonParts(root, true)
     return #parts > 0
 end
 
@@ -399,7 +412,7 @@ local function buyButtonByTeleport(buttonRoot)
         return false
     end
 
-    local parts = getButtonParts(buttonRoot)
+    local parts = getButtonParts(buttonRoot, true)
     if #parts == 0 then return false end
 
     local maxParts = math.min(#parts, 4)
