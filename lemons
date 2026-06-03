@@ -78,7 +78,133 @@ local function setAuto(name, enabled, delaySeconds, callback)
 end
 
 --// AUTO BUY
-local function autoBuyPass()
+-- Scans: workspace -> local player's tycoon -> Purchases -> any Buttons folder -> next visible button.
+local buyQueue = {}
+local buyIndex = 1
+local lastBuyScan = 0
+
+local function getHRP()
+    local char = LocalPlayer.Character
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function safeAttr(obj, attrName)
+    local value = nil
+    pcall(function()
+        value = obj:GetAttribute(attrName)
+    end)
+    return value
+end
+
+local function hasPurchasedFlag(obj)
+    local cur = obj
+    while cur and cur ~= userTycoon do
+        if safeAttr(cur, "Purchased") == true then
+            return true
+        end
+        cur = cur.Parent
+    end
+    return false
+end
+
+local function hasHiddenShownFlag(obj)
+    local cur = obj
+    while cur and cur ~= userTycoon do
+        local shown = safeAttr(cur, "Shown")
+        if shown == false then
+            return true
+        end
+        cur = cur.Parent
+    end
+    return false
+end
+
+local function isVisiblePart(part)
+    local visible = true
+    pcall(function()
+        if part.Transparency >= 0.95 then
+            visible = false
+        end
+    end)
+    return visible
+end
+
+local function partScore(part)
+    if not isVisiblePart(part) then return -1 end
+
+    local name = string.lower(tostring(part.Name))
+    local score = 0
+
+    if string.find(name, "button", 1, true) then score = score + 120 end
+    if string.find(name, "pad", 1, true) then score = score + 100 end
+    if string.find(name, "buy", 1, true) then score = score + 90 end
+    if string.find(name, "purchase", 1, true) then score = score + 80 end
+    if string.find(name, "touch", 1, true) then score = score + 70 end
+    if string.find(name, "hitbox", 1, true) then score = score + 60 end
+
+    pcall(function()
+        if part.Color.G > 0.7 and part.Color.R < 0.45 then
+            score = score + 80
+        end
+    end)
+
+    pcall(function()
+        score = score + math.min(part.Size.X * part.Size.Z, 45)
+    end)
+
+    return score
+end
+
+local function findButtonPart(root)
+    if not root then return nil end
+
+    if root:IsA("BasePart") then
+        return root
+    end
+
+    local bestPart = nil
+    local bestScore = -1
+
+    for _, obj in next, root:GetDescendants() do
+        if obj:IsA("BasePart") then
+            local score = partScore(obj)
+            if score > bestScore then
+                bestScore = score
+                bestPart = obj
+            end
+        end
+    end
+
+    return bestPart
+end
+
+local function isAvailableButtonRoot(root)
+    if not root or not root.Parent then return false end
+    if hasPurchasedFlag(root) then return false end
+    if hasHiddenShownFlag(root) then return false end
+
+    local buttonPart = findButtonPart(root)
+    if not buttonPart then return false end
+    if not isVisiblePart(buttonPart) then return false end
+
+    return true, buttonPart
+end
+
+local function addButtonRoot(root)
+    local ok, buttonPart = isAvailableButtonRoot(root)
+    if ok and buttonPart then
+        buyQueue[#buyQueue + 1] = {
+            root = root,
+            part = buttonPart,
+        }
+    end
+end
+
+local function refreshBuyQueue()
+    buyQueue = {}
+    buyIndex = 1
+    lastBuyScan = tick()
+
     if not userTycoon then
         findTycoon()
         return
@@ -88,24 +214,77 @@ local function autoBuyPass()
     if not purchases then return end
 
     for _, obj in next, purchases:GetDescendants() do
-        if obj:IsA("Model") then
-            local shown = obj:GetAttribute("Shown")
-            local purchased = obj:GetAttribute("Purchased")
-            if shown == true and purchased ~= true then
-                local purchase = obj:FindFirstChild("Purchase")
-                if purchase and purchase:IsA("RemoteFunction") then
-                    local ok = pcall(function()
-                        purchase:InvokeServer()
-                    end)
-                    if ok then
-                        stats.buys = stats.buys + 1
-                    end
+        if obj.Name == "Buttons" then
+            for _, buttonRoot in next, obj:GetChildren() do
+                addButtonRoot(buttonRoot)
+            end
+        end
+    end
+
+    -- Fallback for tycoon layouts where the button model itself is directly under Purchases.
+    if #buyQueue == 0 then
+        for _, obj in next, purchases:GetDescendants() do
+            if obj:IsA("Model") then
+                local shown = safeAttr(obj, "Shown")
+                local purchased = safeAttr(obj, "Purchased")
+                if shown == true and purchased ~= true then
+                    addButtonRoot(obj)
                 end
             end
         end
     end
 end
 
+local function touchPurchaseButton(part)
+    local hrp = getHRP()
+    if not (hrp and part) then return false end
+
+    local targetCFrame = nil
+    pcall(function()
+        targetCFrame = part.CFrame + Vector3.new(0, 3, 0)
+    end)
+
+    if not targetCFrame then
+        pcall(function()
+            targetCFrame = CFrame.new(part.Position + Vector3.new(0, 3, 0))
+        end)
+    end
+
+    if not targetCFrame then return false end
+
+    pcall(function()
+        hrp.CFrame = targetCFrame
+        hrp.Velocity = Vector3.new(0, 0, 0)
+    end)
+
+    if type(firetouchinterest) == "function" then
+        pcall(function()
+            firetouchinterest(hrp, part, 0)
+            wait(0.05)
+            firetouchinterest(hrp, part, 1)
+        end)
+    end
+
+    return true
+end
+
+local function autoBuyPass()
+    if tick() - lastBuyScan > 1 or buyIndex > #buyQueue then
+        refreshBuyQueue()
+    end
+
+    local item = buyQueue[buyIndex]
+    buyIndex = buyIndex + 1
+    if not item then return end
+
+    local ok, buttonPart = isAvailableButtonRoot(item.root)
+    if not ok then return end
+
+    if touchPurchaseButton(buttonPart) then
+        stats.buys = stats.buys + 1
+        wait(0.45)
+    end
+end
 --// AUTO UPGRADE
 local upgradeRemotes = {}
 local upgradeLevel = {}
@@ -448,7 +627,7 @@ local miscTab  = Menu:Tab("Misc")
 local autoSec = mainTab:Section("Automation")
 
 autoSec:Toggle("Auto Buy", false, function(val)
-    setAuto("AutoBuy", val, 0.25, autoBuyPass)
+    setAuto("AutoBuy", val, 0.8, autoBuyPass)
 end)
 
 autoSec:Toggle("Auto Upgrade", false, function(val)
