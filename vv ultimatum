@@ -1,37 +1,39 @@
 -- ============================================================================
--- VV AutoParry — Matcha EXTERNAL (pure polling)  •  CALIBRATED
+-- VV AutoParry — Matcha EXTERNAL (pure polling)  •  CALIBRATED (Gelum dump v2)
 -- ----------------------------------------------------------------------------
+-- Everything below is PERFECT-PARRY on M2. F (RiposteBlock) is kept only for
+-- the genuine "must-riposte" moves that raise the enemy RiposteBlock status.
+--
 -- LIGHT attacks (calibrated):
 --     AttackingSignal ~535ms before hit  ->  CanClash ~83ms before hit  ->  HIT
---     PRIMARY : CanClash appears -> tap M2 (lands ~83ms pre-hit).
+--     PRIMARY : CanClash appears -> tap M2 (perfect parry, lands ~83ms pre-hit).
 --     BACKUP  : AttackingSignal appears -> M2 at +452ms, ONLY if AttackingSignal
---               is still present (real attacks keep it ~880ms; FEINTS drop it
---               ~335ms in and produce no CanClash, so feints are ignored).
+--               is still present (real attacks keep it; FEINTS drop it early and
+--               produce no CanClash, so feints are ignored).
+--     Running Attack also produces CanClash (~531ms in) -> handled automatically.
 --
--- HEAVY attacks -> F / RiposteBlock  (AUTO — not a toggle):
---     Just like auto-parry/auto-block, the RiposteBlock is fully automatic.
---     When the enemy's "HeavyAttack" move appears, F is held automatically
---     across the windup window (covers both fast and slow heavies) and then
---     released. Only the "HeavyAttack" move arms F.
+-- HEAVY KICK -> M2 PERFECT PARRY (timed, AUTO):
+--     Heavy Kick produces NO CanClash and is unblockable, but it CAN be
+--     perfect-parried. Calibrated windup ~555ms (Cooldown "Heavy Kick" -> hit).
+--     We schedule a timed M2 tap to land ~83ms before impact.
+--     More timed attacks can be added in TIMED_PARRIES below.
 --
--- Matcha external = polling only (no signals/animations/hooks); we read the
--- enemy's Status + Cooldowns folders.
+-- RIPOSTE moves -> F / RiposteBlock (AUTO):
+--     When the enemy raises the "RiposteBlock" status (e.g. False Cutter), F is
+--     held automatically across the windup window (~0.45–1.35s) and released.
+--
+-- Matcha external = polling only; we read the enemy's Status + Cooldowns folders.
 --
 -- ============================ CONFIG VIA LOADSTRING =========================
 -- Override ANY option without editing this file. The lock key is just a
 -- single letter/digit — set whatever you like:
 --     _G.VV_AUTOPARRY = {
---         LOCK_KEY   = "C",         -- lock/unlock key (any letter or key name)
---         PING_MS    = 80,          -- your ping; leads blocks earlier
---         HEAVY_WINDOW_START = 0.45,-- F engages this long after "HeavyAttack"
---         HEAVY_WINDOW_END   = 1.15,-- F releases this long after "HeavyAttack"
+--         LOCK_KEY = "C",           -- any single letter/digit
+--         PING_MS  = 80,            -- your ping; leads parries earlier
 --     }
 --     loadstring(game:HttpGet("GITHUBLINK"))()
 --
--- RiposteBlock = F is AUTOMATIC (not configurable): once you lock an enemy it
---     fires by itself, exactly like the M2 auto-parry. There is no heavy key
---     to set.
--- LOCK_KEY is just a single letter or digit, e.g. "C", "V", "1". Default "C".
+-- RiposteBlock = F is AUTOMATIC (fires on the enemy RiposteBlock status).
 -- CONTROLS:  <LOCK_KEY> = lock / unlock the closest enemy to your cursor.
 -- ============================================================================
 
@@ -69,8 +71,8 @@ end
 
 local LOCK_KEY_NAME  = C("LOCK_KEY", "C")        -- single letter/digit (default C)
 local LOCK_KEY  = resolve_key(LOCK_KEY_NAME, "C")
-local HEAVY_KEY = resolve_key("F", "F")          -- F (RiposteBlock) — fixed, fully automatic
-local PING_MS   = C("PING_MS", 0)                -- your ping (ms); leads blocks earlier
+local HEAVY_KEY = resolve_key("F", "F")          -- F (RiposteBlock) — fixed, automatic
+local PING_MS   = C("PING_MS", 0)                -- your ping (ms); leads parries earlier
 local PING_LEAD = math.max(0, PING_MS) / 1000
 local RANGE     = C("RANGE", 14)
 local RANGE_SQ  = RANGE * RANGE
@@ -80,17 +82,25 @@ local LivingFolderName = C("LIVING_FOLDER", "Living")
 local CLASH_EFFECT   = C("CLASH_EFFECT", "CanClash")
 local SIGNAL_EFFECT  = C("SIGNAL_EFFECT", "AttackingSignal")
 local SIGNAL_TO_HIT  = C("SIGNAL_TO_HIT", 0.535)
-local CLASH_TO_HIT   = C("CLASH_TO_HIT", 0.083)
+local CLASH_TO_HIT   = C("CLASH_TO_HIT", 0.083)   -- perfect-parry lead (lands this long pre-hit)
 local BACKUP_AFTER_SIGNAL = SIGNAL_TO_HIT - CLASH_TO_HIT       -- ~0.452
 local PARRY_HOLD     = C("PARRY_HOLD", 0.22)
 local PARRY_COOLDOWN = C("PARRY_COOLDOWN", 0.12)
 local BACKUP_ENABLED = C("BACKUP_ENABLED", true)
 
--- Heavy / RiposteBlock (AUTO — always on, no mode toggle):
-local HEAVY_TRIGGER_NAME = C("HEAVY_TRIGGER_NAME", "HeavyAttack")
-local HEAVY_WINDOW_START = C("HEAVY_WINDOW_START", 0.45) -- F down this long after HeavyAttack
-local HEAVY_WINDOW_END   = C("HEAVY_WINDOW_END",   1.15) -- F released this long after HeavyAttack
-local HEAVY_COOLDOWN     = C("HEAVY_COOLDOWN", 1.50)     -- min gap between heavy triggers
+-- ----- TIMED M2 perfect-parries (attacks with NO CanClash) -----
+-- Each entry: trigger name (found in Cooldowns OR Status) + windup (s, tell->hit).
+-- M2 is tapped to land CLASH_TO_HIT before the hit. Add more as you calibrate.
+local TIMED_PARRIES = C("TIMED_PARRIES", {
+    { name = "Heavy Kick", windup = 0.555 },   -- Gelum Heavy Kick (~560/551ms)
+})
+local TIMED_COOLDOWN = C("TIMED_COOLDOWN", 0.80) -- min gap between re-arming the same attack
+
+-- ----- RiposteBlock (F) — fires on the enemy "RiposteBlock" status -----
+local RIPOSTE_STATUS     = C("RIPOSTE_STATUS", "RiposteBlock")
+local RIPOSTE_WIN_START  = C("RIPOSTE_WIN_START", 0.45)  -- F down this long after status appears
+local RIPOSTE_WIN_END    = C("RIPOSTE_WIN_END",   1.35)  -- F released this long after status appears
+local RIPOSTE_COOLDOWN   = C("RIPOSTE_COOLDOWN", 1.50)
 
 -- ============================ visuals/state ============================
 local v3 = Vector3.new
@@ -98,6 +108,7 @@ local color_green = Color3.new(0,1,0)
 local color_red   = Color3.new(1,0,0)
 local color_white = Color3.new(1,1,1)
 local color_orange= Color3.new(1,0.6,0)
+local color_cyan  = Color3.new(0,1,1)
 local segs = 16
 
 local function track(o) script_state.drawings[#script_state.drawings+1]=o; return o end
@@ -159,12 +170,12 @@ end
 local function has_effect(m,name)
     local s=status_folder(m); return s~=nil and s:FindFirstChild(name)~=nil
 end
--- True only when the enemy is doing the "HeavyAttack" move.
-local function heavy_attack_present(m)
+-- attack present if its name is in EITHER Cooldowns or Status (covers both tells)
+local function attack_present(m,name)
     local cd=cooldowns_folder(m)
-    if cd and cd:FindFirstChild(HEAVY_TRIGGER_NAME) then return true end
+    if cd and cd:FindFirstChild(name) then return true end
     local s=status_folder(m)
-    if s and s:FindFirstChild(HEAVY_TRIGGER_NAME) then return true end
+    if s and s:FindFirstChild(name) then return true end
     return false
 end
 
@@ -194,9 +205,9 @@ end
 
 -- ============================ visuals ============================
 local function hide_visuals() for i=1,segs do circle[i].Visible=false end enemy_label.Visible=false end
-local function draw_visuals(mr,tr,target,heavy)
+local function draw_visuals(mr,tr,target,mode)
     local step=6.283185307179586/segs
-    local col = heavy and color_orange or (target and color_green or color_red)
+    local col = (mode=="heavy" and color_orange) or (mode=="timed" and color_cyan) or (target and color_green or color_red)
     local cx,cy,cz=mr.Position.X,mr.Position.Y-3,mr.Position.Z
     local pts,vis={},{}
     for i=0,segs do local a=i*step; local sp,on=WorldToScreen(v3(cx+math.cos(a)*RANGE,cy,cz+math.sin(a)*RANGE)); pts[i]=sp; vis[i]=on end
@@ -222,17 +233,24 @@ local prev_clash=false
 local prev_signal=false
 local backup_time=0
 local backup_armed=false
-local prev_heavy=false
-local heavy_scheduled=false
-local heavy_win_start=0
-local heavy_win_end=0
-local last_heavy_trigger=-999
+-- timed parry state (per attack name)
+local timed_prev={}        -- name -> bool present last frame
+local timed_fire={}        -- name -> tick() to fire M2, or nil
+local timed_last={}        -- name -> last arm time
+-- riposte (F) state
+local prev_riposte=false
+local riposte_scheduled=false
+local riposte_win_start=0
+local riposte_win_end=0
+local last_riposte_trigger=-999
+
 local function reset_detection()
     prev_clash=false; prev_signal=false; backup_time=0; backup_armed=false
-    prev_heavy=false; heavy_scheduled=false; heavy_win_start=0; heavy_win_end=0
+    timed_prev={}; timed_fire={}; timed_last={}
+    prev_riposte=false; riposte_scheduled=false; riposte_win_start=0; riposte_win_end=0
 end
 
-print(("VV AutoParry loaded. Lock key=%s | ping=%dms | RiposteBlock(F)=AUTO. Press lock key over an enemy."):format(tostring(LOCK_KEY_NAME), PING_MS))
+print(("VV AutoParry loaded. Lock key=%s | ping=%dms | HeavyKick=M2 perfect-parry | RiposteBlock(F)=auto. Press lock key over an enemy."):format(tostring(LOCK_KEY_NAME), PING_MS))
 
 -- ============================ main loop ============================
 local last_lock=false
@@ -251,38 +269,57 @@ while script_state.running do
         target=nil; set_block(false); set_heavy_block(false); reset_detection(); hide_visuals(); update_status_label(nil,false)
     else
         local tr=nil
-        local heavy_now=false
+        local mode=nil          -- "heavy" (F), "timed" (M2 timed), or nil
         if target and target.Parent and is_enemy(target) then
             tr=get_hrp(target)
             if tr then
                 local in_range = dist_sq(tr.Position,mr.Position) <= RANGE_SQ
                 local now=tick()
 
-                -- ----- HEAVY (F / RiposteBlock): AUTO on "HeavyAttack" -----
-                local heavy_present = heavy_attack_present(target)
-                if in_range and heavy_present and not prev_heavy and (now-last_heavy_trigger) > HEAVY_COOLDOWN then
-                    last_heavy_trigger = now
-                    heavy_scheduled = true
-                    heavy_win_start = now + (HEAVY_WINDOW_START - PING_LEAD)
-                    heavy_win_end   = now + (HEAVY_WINDOW_END   - PING_LEAD)
+                -- ----- RIPOSTE (F / RiposteBlock): on enemy RiposteBlock status -----
+                local riposte_now = has_effect(target, RIPOSTE_STATUS)
+                if in_range and riposte_now and not prev_riposte and (now-last_riposte_trigger) > RIPOSTE_COOLDOWN then
+                    last_riposte_trigger = now
+                    riposte_scheduled = true
+                    riposte_win_start = now + (RIPOSTE_WIN_START - PING_LEAD)
+                    riposte_win_end   = now + (RIPOSTE_WIN_END   - PING_LEAD)
                     last_reason = "armed RiposteBlock"
                 end
-                prev_heavy = heavy_present
+                prev_riposte = riposte_now
 
-                if heavy_scheduled then
-                    if now >= heavy_win_start and now <= heavy_win_end and in_range then
-                        heavy_now = true
-                        set_block(false)
-                        set_heavy_block(true)
+                local heavy_active=false
+                if riposte_scheduled then
+                    if now >= riposte_win_start and now <= riposte_win_end and in_range then
+                        heavy_active = true
+                        set_block(false); set_heavy_block(true)
                         last_reason = "RiposteBlock (F)"
-                    elseif now > heavy_win_end then
-                        heavy_scheduled = false
-                        set_heavy_block(false)
+                    elseif now > riposte_win_end then
+                        riposte_scheduled = false; set_heavy_block(false)
+                    end
+                end
+                if heavy_active then mode="heavy" else set_heavy_block(false) end
+
+                -- ----- TIMED M2 perfect-parries (Heavy Kick, etc.) -----
+                if not heavy_active then
+                    for _,tp in ipairs(TIMED_PARRIES) do
+                        local nm = tp.name
+                        local present = attack_present(target, nm)
+                        if in_range and present and not timed_prev[nm]
+                           and (now - (timed_last[nm] or -999)) > TIMED_COOLDOWN then
+                            timed_last[nm] = now
+                            timed_fire[nm] = now + (tp.windup - CLASH_TO_HIT - PING_LEAD)
+                            last_reason = "armed "..nm
+                        end
+                        timed_prev[nm] = present
+                        if timed_fire[nm] and now >= timed_fire[nm] then
+                            timed_fire[nm] = nil
+                            if in_range then tap_parry(nm.." parry"); mode="timed" end
+                        end
                     end
                 end
 
-                -- ----- LIGHT parry (only when F / RiposteBlock is not engaged) -----
-                if not heavy_now and in_range then
+                -- ----- LIGHT parry on CanClash (+ signal backup) -----
+                if not heavy_active and in_range then
                     local clash_now  = has_effect(target, CLASH_EFFECT)
                     local signal_now = has_effect(target, SIGNAL_EFFECT)
 
@@ -292,8 +329,6 @@ while script_state.running do
                     if BACKUP_ENABLED and signal_now and not prev_signal then
                         backup_time=now+(BACKUP_AFTER_SIGNAL-PING_LEAD); backup_armed=true; last_reason="armed signal"
                     end
-                    -- Fire backup ONLY if AttackingSignal is still present == real attack.
-                    -- Feints drop AttackingSignal ~335ms in (before this point) -> skipped.
                     if backup_armed and now>=backup_time then
                         if not parry_busy and has_effect(target, SIGNAL_EFFECT) then
                             tap_parry("backup:signal")
@@ -307,7 +342,7 @@ while script_state.running do
                 end
 
                 -- release M2 when idle
-                if not heavy_now and not parry_busy then set_block(false) end
+                if not heavy_active and not parry_busy then set_block(false) end
 
                 update_status_label(target,in_range)
             end
@@ -317,7 +352,7 @@ while script_state.running do
             update_status_label(nil,false)
         end
 
-        draw_visuals(mr,tr,target,heavy_now)
+        draw_visuals(mr,tr,target,mode)
     end
 end
 
