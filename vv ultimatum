@@ -1,51 +1,8 @@
--- ============================================================================
--- VV AutoParry — Matcha EXTERNAL (pure polling)  •  CALIBRATED (Gelum dump v2)
--- ----------------------------------------------------------------------------
--- Everything below is PERFECT-PARRY on M2. F (RiposteBlock) is kept only for
--- the genuine "must-riposte" moves that raise the enemy RiposteBlock status.
---
--- LIGHT attacks (calibrated):
---     AttackingSignal ~535ms before hit  ->  CanClash ~83ms before hit  ->  HIT
---     PRIMARY : CanClash appears -> tap M2 (perfect parry, lands ~83ms pre-hit).
---     BACKUP  : AttackingSignal appears -> M2 at +452ms, ONLY if AttackingSignal
---               is still present (real attacks keep it; FEINTS drop it early and
---               produce no CanClash, so feints are ignored).
---     Running Attack also produces CanClash (~531ms in) -> handled automatically.
---
--- HEAVY KICK -> M2 PERFECT PARRY (timed, AUTO):
---     Heavy Kick produces NO CanClash and is unblockable, but it CAN be
---     perfect-parried. Calibrated windup ~554ms across 3 samples (560/551/552),
---     measured Cooldown "Heavy Kick" -> hit. We tap M2 to land ~83ms pre-impact.
---     Running Attack (668ms windup) raises CanClash @+531ms -> auto-handled.
---     Add more attacks to the MOVES table below as you calibrate them.
---
--- RIPOSTE moves -> F / RiposteBlock (AUTO, PER-MOVE TIMED):
---     Each riposte move (e.g. False Cutter) is timed to ITS OWN windup so fast
---     and slow moves both land — F engages just before impact, not on a single
---     shared window. Uncalibrated riposte moves fall back to a generic window
---     on the "RiposteBlock" status until you add them to MOVES.
---
--- Matcha external = polling only; we read the enemy's Status + Cooldowns folders.
---
--- ============================ CONFIG VIA LOADSTRING =========================
--- Override ANY option without editing this file. The lock key is just a
--- single letter/digit — set whatever you like:
---     _G.VV_AUTOPARRY = {
---         LOCK_KEY = "C",           -- any single letter/digit
---         PING_MS  = 80,            -- your ping; leads parries earlier
---     }
---     loadstring(game:HttpGet("GITHUBLINK"))()
---
--- RiposteBlock = F is AUTOMATIC (fires on the enemy RiposteBlock status).
--- CONTROLS:  <LOCK_KEY> = lock / unlock the closest enemy to your cursor.
--- ============================================================================
-
 local Players   = game:GetService("Players")
 local Workspace = workspace or game:GetService("Workspace")
 local LP    = Players.LocalPlayer
 local Mouse = LP:GetMouse()
 
--- ---------- single-instance guard ----------
 local INSTANCE_KEY = "__VV_AUTOPARRY_MATCHA_STATE"
 local old = _G and _G[INSTANCE_KEY]
 if old then
@@ -55,8 +12,6 @@ end
 local script_state = { running = true, drawings = {} }
 if _G then _G[INSTANCE_KEY] = script_state end
 
--- ============================ key resolver ============================
--- Turn a single letter/digit (e.g. "C") into what iskeypressed expects.
 local function resolve_key(key, fallback)
     if type(key) == "string" and #key >= 1 then
         return key:upper():sub(1,1):byte()
@@ -64,7 +19,6 @@ local function resolve_key(key, fallback)
     return fallback:byte()
 end
 
--- ============================ USER CONFIG ============================
 local USER = (_G and _G.VV_AUTOPARRY) or {}
 local function C(key, default)
     local v = USER[key]
@@ -72,55 +26,41 @@ local function C(key, default)
     return default
 end
 
-local LOCK_KEY_NAME  = C("LOCK_KEY", "C")        -- single letter/digit (default C)
-local LOCK_KEY  = resolve_key(LOCK_KEY_NAME, "C")
-local HEAVY_KEY = resolve_key("F", "F")          -- F (RiposteBlock) — fixed, automatic
-local PING_MS   = C("PING_MS", 0)                -- your ping (ms); leads parries earlier
+local LOCK_KEY  = resolve_key(C("LOCK_KEY", "C"), "C")
+local HEAVY_KEY = resolve_key("F", "F")
+local PING_MS   = C("PING_MS", 0)
 local PING_LEAD = math.max(0, PING_MS) / 1000
+local SHOW_RADIUS = C("SHOW_RADIUS", true)
 local RANGE     = C("RANGE", 14)
 local RANGE_SQ  = RANGE * RANGE
 local LivingFolderName = C("LIVING_FOLDER", "Living")
 
--- Light parry (calibrated; rarely needs changing):
 local CLASH_EFFECT   = C("CLASH_EFFECT", "CanClash")
 local SIGNAL_EFFECT  = C("SIGNAL_EFFECT", "AttackingSignal")
 local SIGNAL_TO_HIT  = C("SIGNAL_TO_HIT", 0.535)
-local CLASH_TO_HIT   = C("CLASH_TO_HIT", 0.083)   -- perfect-parry lead (lands this long pre-hit)
-local BACKUP_AFTER_SIGNAL = SIGNAL_TO_HIT - CLASH_TO_HIT       -- ~0.452
+local CLASH_TO_HIT   = C("CLASH_TO_HIT", 0.083)
+local BACKUP_AFTER_SIGNAL = SIGNAL_TO_HIT - CLASH_TO_HIT
 local PARRY_HOLD     = C("PARRY_HOLD", 0.22)
 local PARRY_COOLDOWN = C("PARRY_COOLDOWN", 0.12)
 local BACKUP_ENABLED = C("BACKUP_ENABLED", true)
 
--- ----- TIMED M2 perfect-parries (attacks with NO CanClash) -----
--- Each entry: trigger name (found in Cooldowns OR Status) + windup (s, tell->hit).
--- M2 is tapped to land CLASH_TO_HIT before the hit. Add more as you calibrate.
--- Each move maps to an action timed to ITS OWN windup (tell -> hit, seconds):
---    action = "parry"   -> tap M2 to land CLASH_TO_HIT before impact (perfect parry)
---    action = "riposte" -> press F (RiposteBlock) to land RIPOSTE_LEAD before
---                          impact, held RIPOSTE_HOLD seconds
--- This is what fixes "F too early/late": every move gets its own timing instead
--- of one shared window. Calibrate windup from logger dumps (Cooldown+ -> HIT).
 local MOVES = C("MOVES", {
-    ["Heavy Kick"]   = { action = "parry",   windup = 0.554 }, -- 3 samples: 560/551/552ms
-    ["False Cutter"] = { action = "riposte", windup = 1.222 }, -- 1 sample — refine me
+    ["Heavy Kick"]   = { action = "parry",   windup = 0.554 },
+    ["False Cutter"] = { action = "riposte", windup = 1.222 },
 })
-local MOVE_COOLDOWN = C("MOVE_COOLDOWN", 0.80)  -- min gap before re-arming the same move
-local RIPOSTE_LEAD  = C("RIPOSTE_LEAD", 0.12)   -- F engages this long before impact
-local RIPOSTE_HOLD  = C("RIPOSTE_HOLD", 0.30)   -- F held this long around impact
+local MOVE_COOLDOWN = C("MOVE_COOLDOWN", 0.80)
+local RIPOSTE_LEAD  = C("RIPOSTE_LEAD", 0.12)
+local RIPOSTE_HOLD  = C("RIPOSTE_HOLD", 0.30)
 
--- ----- RiposteBlock (F) FALLBACK — generic window on the "RiposteBlock" status -----
--- Used ONLY for riposte moves not yet calibrated in MOVES (best-effort).
 local RIPOSTE_STATUS     = C("RIPOSTE_STATUS", "RiposteBlock")
 local RIPOSTE_FALLBACK   = C("RIPOSTE_FALLBACK", true)
-local RIPOSTE_WIN_START  = C("RIPOSTE_WIN_START", 0.45)  -- F down this long after status appears
-local RIPOSTE_WIN_END    = C("RIPOSTE_WIN_END",   1.35)  -- F released this long after status appears
+local RIPOSTE_WIN_START  = C("RIPOSTE_WIN_START", 0.45)
+local RIPOSTE_WIN_END    = C("RIPOSTE_WIN_END",   1.35)
 local RIPOSTE_COOLDOWN   = C("RIPOSTE_COOLDOWN", 1.50)
 
--- ============================ visuals/state ============================
 local v3 = Vector3.new
 local color_green = Color3.new(0,1,0)
 local color_red   = Color3.new(1,0,0)
-local color_white = Color3.new(1,1,1)
 local color_orange= Color3.new(1,0.6,0)
 local color_cyan  = Color3.new(0,1,1)
 local segs = 16
@@ -138,14 +78,13 @@ script_state.cleanup = function()
 end
 
 local circle = {}
-for i=1,segs do local l=track(Drawing.new("Line")); l.Thickness=1; l.Visible=false; circle[i]=l end
-local enemy_label = track(Drawing.new("Text"))
-enemy_label.Outline=true; enemy_label.Center=true; enemy_label.Size=14; enemy_label.Color=color_red; enemy_label.Visible=false
-local status_label = track(Drawing.new("Text"))
-status_label.Outline=true; status_label.Center=false; status_label.Size=13; status_label.Color=color_white
-status_label.Position = Vector2.new(18,92); status_label.Visible=true
+local enemy_label = nil
+if SHOW_RADIUS then
+    for i=1,segs do local l=track(Drawing.new("Line")); l.Thickness=1; l.Visible=false; circle[i]=l end
+    enemy_label = track(Drawing.new("Text"))
+    enemy_label.Outline=true; enemy_label.Center=true; enemy_label.Size=14; enemy_label.Color=color_red; enemy_label.Visible=false
+end
 
--- ============================ helpers ============================
 local function safe(fn,fb) local ok,r=pcall(fn); if ok then return r end return fb end
 local function get_hrp(m) return m and m:FindFirstChild("HumanoidRootPart") end
 local function my_char() return LP and LP.Character end
@@ -184,7 +123,6 @@ end
 local function has_effect(m,name)
     local s=status_folder(m); return s~=nil and s:FindFirstChild(name)~=nil
 end
--- attack present if its name is in EITHER Cooldowns or Status (covers both tells)
 local function attack_present(m,name)
     local cd=cooldowns_folder(m)
     if cd and cd:FindFirstChild(name) then return true end
@@ -193,7 +131,6 @@ local function attack_present(m,name)
     return false
 end
 
--- ============================ input ============================
 local blocking, heavy_blocking = false, false
 local function m2_down() if type(mouse2press)=="function" then safe(mouse2press) elseif type(mousepress)=="function" then safe(function() mousepress(2) end) end end
 local function m2_up()   if type(mouse2release)=="function" then safe(mouse2release) elseif type(mouserelease)=="function" then safe(function() mouserelease(2) end) end end
@@ -202,13 +139,11 @@ local function heavy_down() if type(keypress)=="function" then safe(function() k
 local function heavy_up()   if type(keyrelease)=="function" then safe(function() keyrelease(HEAVY_KEY) end) end end
 local function set_heavy_block(s) if s==heavy_blocking then return end heavy_blocking=s; if s then heavy_down() else heavy_up() end end
 
--- ============================ executors ============================
 local parry_busy, last_parry_time = false, 0
-local last_reason = "none"
 local function tap_parry(reason)
     if parry_busy then return false end
     if tick()-last_parry_time < PARRY_COOLDOWN then return false end
-    parry_busy=true; last_parry_time=tick(); last_reason=reason or last_reason
+    parry_busy=true; last_parry_time=tick()
     task.spawn(function()
         if not script_state.running then parry_busy=false return end
         set_block(true); task.wait(PARRY_HOLD); set_block(false)
@@ -217,9 +152,13 @@ local function tap_parry(reason)
     return true
 end
 
--- ============================ visuals ============================
-local function hide_visuals() for i=1,segs do circle[i].Visible=false end enemy_label.Visible=false end
+local function hide_visuals()
+    if not SHOW_RADIUS then return end
+    for i=1,segs do circle[i].Visible=false end
+    if enemy_label then enemy_label.Visible=false end
+end
 local function draw_visuals(mr,tr,target,mode)
+    if not SHOW_RADIUS then return end
     local step=6.283185307179586/segs
     local col = (mode=="heavy" and color_orange) or (mode=="timed" and color_cyan) or (target and color_green or color_red)
     local cx,cy,cz=mr.Position.X,mr.Position.Y-3,mr.Position.Z
@@ -229,33 +168,22 @@ local function draw_visuals(mr,tr,target,mode)
         if vis[i-1] and vis[i] then l.From=Vector2.new(pts[i-1].X,pts[i-1].Y); l.To=Vector2.new(pts[i].X,pts[i].Y); l.Color=col; l.Visible=true
         else l.Visible=false end
     end
-    if target and tr then
+    if target and tr and enemy_label then
         local lp,on=WorldToScreen(tr.Position+v3(0,4,0))
         if on then enemy_label.Text=tostring(target.Name); enemy_label.Position=Vector2.new(lp.X,lp.Y); enemy_label.Visible=true else enemy_label.Visible=false end
-    else enemy_label.Visible=false end
-end
-local function update_status_label(target,in_range)
-    local tn=target and target.Name or "none"
-    local bt = heavy_blocking and "F(RiposteBlock)" or (blocking and "M2" or "idle")
-    status_label.Text = ("VV Parry | lock=%s | target: %s | %s | %s%s"):format(tostring(LOCK_KEY_NAME),tn,bt,last_reason,in_range and "" or " | (far)")
-    status_label.Color = heavy_blocking and color_orange or (blocking and color_green or color_white)
+    elseif enemy_label then enemy_label.Visible=false end
 end
 
--- ============================ detection state ============================
 local target=nil
 local prev_clash=false
 local prev_signal=false
 local backup_time=0
 local backup_armed=false
--- per-move state (keyed by move name)
-local move_prev={}         -- name -> present last frame
-local move_last={}         -- name -> last arm time
-local parry_fire={}        -- name -> tick() to tap M2 (parry moves), or nil
--- single F engagement window (one riposte resolves at a time)
+local move_prev={}
+local move_last={}
+local parry_fire={}
 local f_start=0
 local f_end=0
-local f_active=false
--- generic RiposteBlock-status fallback state
 local prev_riposte=false
 local riposte_scheduled=false
 local riposte_win_start=0
@@ -265,16 +193,10 @@ local last_riposte_trigger=-999
 local function reset_detection()
     prev_clash=false; prev_signal=false; backup_time=0; backup_armed=false
     move_prev={}; move_last={}; parry_fire={}
-    f_start=0; f_end=0; f_active=false
+    f_start=0; f_end=0
     prev_riposte=false; riposte_scheduled=false; riposte_win_start=0; riposte_win_end=0
 end
 
-do
-    local n=0; for _ in pairs(MOVES) do n=n+1 end
-    print(("VV AutoParry loaded. Lock key=%s | ping=%dms | %d calibrated moves | per-move timed M2/F. Press lock key over an enemy."):format(tostring(LOCK_KEY_NAME), PING_MS, n))
-end
-
--- ============================ main loop ============================
 local last_lock=false
 while script_state.running do
     task.wait()
@@ -288,19 +210,16 @@ while script_state.running do
 
     local mr=my_root()
     if not mr then
-        target=nil; set_block(false); set_heavy_block(false); reset_detection(); hide_visuals(); update_status_label(nil,false)
+        target=nil; set_block(false); set_heavy_block(false); reset_detection(); hide_visuals()
     else
         local tr=nil
-        local mode=nil          -- "heavy" (F), "timed" (M2 timed), or nil
+        local mode=nil
         if target and target.Parent and is_enemy(target) then
             tr=get_hrp(target)
             if tr then
                 local in_range = dist_sq(tr.Position,mr.Position) <= RANGE_SQ
                 local now=tick()
 
-                -- ----- PER-MOVE timed actions (detected by name) -----
-                -- Arm each known move on its rising edge and schedule its action
-                -- timed to that move's own windup (fixes fast-vs-slow F timing).
                 for nm,info in pairs(MOVES) do
                     local present = attack_present(target, nm)
                     if in_range and present and not move_prev[nm]
@@ -309,24 +228,20 @@ while script_state.running do
                         if info.action == "riposte" then
                             f_start = now + (info.windup - RIPOSTE_LEAD - PING_LEAD)
                             f_end   = f_start + RIPOSTE_HOLD
-                            last_reason = "armed "..nm.." (F)"
-                        else -- parry
+                        else
                             parry_fire[nm] = now + (info.windup - CLASH_TO_HIT - PING_LEAD)
-                            last_reason = "armed "..nm.." (M2)"
                         end
                     end
                     move_prev[nm] = present
                 end
 
-                -- fire scheduled M2 perfect-parries
                 for nm,t in pairs(parry_fire) do
                     if t and now >= t then
                         parry_fire[nm] = nil
-                        if in_range then tap_parry(nm.." parry"); mode="timed" end
+                        if in_range then tap_parry("timed"); mode="timed" end
                     end
                 end
 
-                -- ----- GENERIC RiposteBlock fallback (uncalibrated moves) -----
                 if RIPOSTE_FALLBACK then
                     local riposte_now = has_effect(target, RIPOSTE_STATUS)
                     if in_range and riposte_now and not prev_riposte and (now-last_riposte_trigger) > RIPOSTE_COOLDOWN then
@@ -334,21 +249,19 @@ while script_state.running do
                         riposte_scheduled = true
                         riposte_win_start = now + (RIPOSTE_WIN_START - PING_LEAD)
                         riposte_win_end   = now + (RIPOSTE_WIN_END   - PING_LEAD)
-                        last_reason = "armed RiposteBlock (fallback)"
                     end
                     prev_riposte = riposte_now
                 end
 
-                -- ----- Resolve F (riposte) engagement: per-move window OR fallback window -----
                 local heavy_active=false
                 if (f_start ~= 0) and now >= f_start and now <= f_end and in_range then
-                    heavy_active = true; last_reason = "RiposteBlock (F)"
+                    heavy_active = true
                 elseif (f_start ~= 0) and now > f_end then
                     f_start = 0; f_end = 0
                 end
                 if not heavy_active and riposte_scheduled then
                     if now >= riposte_win_start and now <= riposte_win_end and in_range then
-                        heavy_active = true; last_reason = "RiposteBlock (F fallback)"
+                        heavy_active = true
                     elseif now > riposte_win_end then
                         riposte_scheduled = false
                     end
@@ -356,21 +269,15 @@ while script_state.running do
                 if heavy_active then set_block(false); set_heavy_block(true); mode="heavy"
                 else set_heavy_block(false) end
 
-                -- ----- LIGHT parry on CanClash (+ signal backup) -----
                 if not heavy_active and in_range then
                     local clash_now  = has_effect(target, CLASH_EFFECT)
                     local signal_now = has_effect(target, SIGNAL_EFFECT)
-
-                    if clash_now and not prev_clash then
-                        tap_parry("CanClash"); last_reason="parry CanClash"
-                    end
+                    if clash_now and not prev_clash then tap_parry("clash") end
                     if BACKUP_ENABLED and signal_now and not prev_signal then
-                        backup_time=now+(BACKUP_AFTER_SIGNAL-PING_LEAD); backup_armed=true; last_reason="armed signal"
+                        backup_time=now+(BACKUP_AFTER_SIGNAL-PING_LEAD); backup_armed=true
                     end
                     if backup_armed and now>=backup_time then
-                        if not parry_busy and has_effect(target, SIGNAL_EFFECT) then
-                            tap_parry("backup:signal")
-                        end
+                        if not parry_busy and has_effect(target, SIGNAL_EFFECT) then tap_parry("backup") end
                         backup_armed=false
                     end
                     prev_clash=clash_now; prev_signal=signal_now
@@ -379,15 +286,11 @@ while script_state.running do
                     prev_signal = has_effect(target, SIGNAL_EFFECT)
                 end
 
-                -- release M2 when idle
                 if not heavy_active and not parry_busy then set_block(false) end
-
-                update_status_label(target,in_range)
             end
         else
             target=nil; set_heavy_block(false); reset_detection()
             if not parry_busy then set_block(false) end
-            update_status_label(nil,false)
         end
 
         draw_visuals(mr,tr,target,mode)
