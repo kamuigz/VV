@@ -1,3 +1,7 @@
+-- VV AutoParry — Matcha EXTERNAL (release build, M2-only)
+-- _G.VV_AUTOPARRY = { LOCK_KEY = "C", PING_MS = 0, AUTO_PING = true, SHOW_RADIUS = true }
+-- loadstring(game:HttpGet("GITHUBLINK"))()
+
 local Players   = game:GetService("Players")
 local Workspace = workspace or game:GetService("Workspace")
 local LP    = Players.LocalPlayer
@@ -27,8 +31,8 @@ local function C(key, default)
 end
 
 local LOCK_KEY  = resolve_key(C("LOCK_KEY", "C"), "C")
-local HEAVY_KEY = resolve_key("F", "F")
 local PING_MS   = C("PING_MS", 0)
+local AUTO_PING = C("AUTO_PING", true)
 local PING_LEAD = math.max(0, PING_MS) / 1000
 local SHOW_RADIUS = C("SHOW_RADIUS", true)
 local RANGE     = C("RANGE", 14)
@@ -50,19 +54,10 @@ local MOVES = C("MOVES", {
 })
 local MOVE_COOLDOWN = C("MOVE_COOLDOWN", 0.80)
 local BLOCK_LEAD = C("BLOCK_LEAD", 0.22)
-local RIPOSTE_LEAD  = C("RIPOSTE_LEAD", 0.12)
-local RIPOSTE_HOLD  = C("RIPOSTE_HOLD", 0.30)
-
-local RIPOSTE_STATUS     = C("RIPOSTE_STATUS", "RiposteBlock")
-local RIPOSTE_FALLBACK   = C("RIPOSTE_FALLBACK", false)
-local RIPOSTE_WIN_START  = C("RIPOSTE_WIN_START", 0.45)
-local RIPOSTE_WIN_END    = C("RIPOSTE_WIN_END",   1.35)
-local RIPOSTE_COOLDOWN   = C("RIPOSTE_COOLDOWN", 1.50)
 
 local v3 = Vector3.new
 local color_green = Color3.new(0,1,0)
 local color_red   = Color3.new(1,0,0)
-local color_orange= Color3.new(1,0.6,0)
 local color_cyan  = Color3.new(0,1,1)
 local segs = 16
 
@@ -93,6 +88,28 @@ local function my_root() return get_hrp(my_char()) end
 local function living_folder() return Workspace and Workspace:FindFirstChild(LivingFolderName) end
 local function status_folder(m) return m and m:FindFirstChild("Status") end
 local function cooldowns_folder(m) return m and m:FindFirstChild("Cooldowns") end
+
+local last_ping_poll = 0
+local function update_ping()
+    if not AUTO_PING then return end
+    local now = tick()
+    if now - last_ping_poll < 1 then return end
+    last_ping_poll = now
+    local p = safe(function()
+        local v = LP:GetNetworkPing()
+        if type(v) == "number" then return v * 1000 end
+        return nil
+    end)
+    if not p then
+        p = safe(function()
+            local stats = game:GetService("Stats")
+            return stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+        end)
+    end
+    if type(p) == "number" and p >= 0 then
+        PING_LEAD = math.max(0, math.max(PING_MS, p)) / 1000
+    end
+end
 
 local function is_enemy(m)
     if not m or not m.Parent then return false end
@@ -132,13 +149,10 @@ local function attack_present(m,name)
     return false
 end
 
-local blocking, heavy_blocking = false, false
+local blocking = false
 local function m2_down() if type(mouse2press)=="function" then safe(mouse2press) elseif type(mousepress)=="function" then safe(function() mousepress(2) end) end end
 local function m2_up()   if type(mouse2release)=="function" then safe(mouse2release) elseif type(mouserelease)=="function" then safe(function() mouserelease(2) end) end end
 local function set_block(s) if s==blocking then return end blocking=s; if s then m2_down() else m2_up() end end
-local function heavy_down() if type(keypress)=="function" then safe(function() keypress(HEAVY_KEY) end) end end
-local function heavy_up()   if type(keyrelease)=="function" then safe(function() keyrelease(HEAVY_KEY) end) end end
-local function set_heavy_block(s) if s==heavy_blocking then return end heavy_blocking=s; if s then heavy_down() else heavy_up() end end
 
 local parry_busy, last_parry_time = false, 0
 local function tap_parry(reason)
@@ -161,7 +175,7 @@ end
 local function draw_visuals(mr,tr,target,mode)
     if not SHOW_RADIUS then return end
     local step=6.283185307179586/segs
-    local col = (mode=="heavy" and color_orange) or (mode=="timed" and color_cyan) or (target and color_green or color_red)
+    local col = (mode=="timed" and color_cyan) or (target and color_green or color_red)
     local cx,cy,cz=mr.Position.X,mr.Position.Y-3,mr.Position.Z
     local pts,vis={},{}
     for i=0,segs do local a=i*step; local sp,on=WorldToScreen(v3(cx+math.cos(a)*RANGE,cy,cz+math.sin(a)*RANGE)); pts[i]=sp; vis[i]=on end
@@ -183,37 +197,30 @@ local backup_armed=false
 local move_prev={}
 local move_last={}
 local parry_fire={}
-local f_start=0
-local f_end=0
 local block_start=0
 local block_end=0
-local prev_riposte=false
-local riposte_scheduled=false
-local riposte_win_start=0
-local riposte_win_end=0
-local last_riposte_trigger=-999
 
 local function reset_detection()
     prev_clash=false; prev_signal=false; backup_time=0; backup_armed=false
     move_prev={}; move_last={}; parry_fire={}
-    f_start=0; f_end=0; block_start=0; block_end=0
-    prev_riposte=false; riposte_scheduled=false; riposte_win_start=0; riposte_win_end=0
+    block_start=0; block_end=0
 end
 
 local last_lock=false
 while script_state.running do
     task.wait()
+    update_ping()
 
     local lock_now = type(iskeypressed)=="function" and iskeypressed(LOCK_KEY) or false
     if lock_now and not last_lock then
-        if target then target=nil; set_block(false); set_heavy_block(false); reset_detection()
+        if target then target=nil; set_block(false); reset_detection()
         else target=closest_to_cursor(); reset_detection() end
     end
     last_lock=lock_now
 
     local mr=my_root()
     if not mr then
-        target=nil; set_block(false); set_heavy_block(false); reset_detection(); hide_visuals()
+        target=nil; set_block(false); reset_detection(); hide_visuals()
     else
         local tr=nil
         local mode=nil
@@ -228,10 +235,7 @@ while script_state.running do
                     if in_range and present and not move_prev[nm]
                        and (now - (move_last[nm] or -999)) > MOVE_COOLDOWN then
                         move_last[nm] = now
-                        if info.action == "riposte" then
-                            f_start = now + (info.windup - RIPOSTE_LEAD - PING_LEAD)
-                            f_end   = f_start + RIPOSTE_HOLD
-                        elseif info.action == "block" then
+                        if info.action == "block" then
                             block_start = now + (info.windup - BLOCK_LEAD - PING_LEAD)
                             block_end   = block_start + (info.hold or 0.5)
                         else
@@ -248,31 +252,6 @@ while script_state.running do
                     end
                 end
 
-                if RIPOSTE_FALLBACK then
-                    local riposte_now = has_effect(target, RIPOSTE_STATUS)
-                    if in_range and riposte_now and not prev_riposte and (now-last_riposte_trigger) > RIPOSTE_COOLDOWN then
-                        last_riposte_trigger = now
-                        riposte_scheduled = true
-                        riposte_win_start = now + (RIPOSTE_WIN_START - PING_LEAD)
-                        riposte_win_end   = now + (RIPOSTE_WIN_END   - PING_LEAD)
-                    end
-                    prev_riposte = riposte_now
-                end
-
-                local heavy_active=false
-                if (f_start ~= 0) and now >= f_start and now <= f_end and in_range then
-                    heavy_active = true
-                elseif (f_start ~= 0) and now > f_end then
-                    f_start = 0; f_end = 0
-                end
-                if not heavy_active and riposte_scheduled then
-                    if now >= riposte_win_start and now <= riposte_win_end and in_range then
-                        heavy_active = true
-                    elseif now > riposte_win_end then
-                        riposte_scheduled = false
-                    end
-                end
-
                 local block_active=false
                 if (block_start ~= 0) and now >= block_start and now <= block_end and in_range then
                     block_active = true
@@ -280,11 +259,9 @@ while script_state.running do
                     block_start = 0; block_end = 0
                 end
 
-                if heavy_active then set_block(false); set_heavy_block(true); mode="heavy"
-                elseif block_active then set_heavy_block(false); set_block(true); mode="timed"
-                else set_heavy_block(false) end
+                if block_active then set_block(true); mode="timed" end
 
-                if not heavy_active and not block_active and in_range then
+                if not block_active and in_range then
                     local clash_now  = has_effect(target, CLASH_EFFECT)
                     local signal_now = has_effect(target, SIGNAL_EFFECT)
                     if clash_now and not prev_clash then tap_parry("clash") end
@@ -301,10 +278,10 @@ while script_state.running do
                     prev_signal = has_effect(target, SIGNAL_EFFECT)
                 end
 
-                if not heavy_active and not block_active and not parry_busy then set_block(false) end
+                if not block_active and not parry_busy then set_block(false) end
             end
         else
-            target=nil; set_heavy_block(false); reset_detection()
+            target=nil; reset_detection()
             if not parry_busy then set_block(false) end
         end
 
@@ -312,5 +289,5 @@ while script_state.running do
     end
 end
 
-set_block(false); set_heavy_block(false); hide_visuals(); script_state.cleanup()
+set_block(false); hide_visuals(); script_state.cleanup()
 if _G and _G[INSTANCE_KEY]==script_state then _G[INSTANCE_KEY]=nil end
