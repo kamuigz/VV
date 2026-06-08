@@ -45,15 +45,16 @@ local PARRY_COOLDOWN = C("PARRY_COOLDOWN", 0.12)
 local BACKUP_ENABLED = C("BACKUP_ENABLED", true)
 
 local MOVES = C("MOVES", {
-    ["Heavy Kick"]   = { action = "parry",   windup = 0.554 },
-    ["False Cutter"] = { action = "riposte", windup = 1.222 },
+    ["Heavy Kick"]   = { action = "parry", windup = 0.554 },
+    ["False Cutter"] = { action = "block", windup = 1.222, hold = 0.50 },
 })
 local MOVE_COOLDOWN = C("MOVE_COOLDOWN", 0.80)
+local BLOCK_LEAD = C("BLOCK_LEAD", 0.22)
 local RIPOSTE_LEAD  = C("RIPOSTE_LEAD", 0.12)
 local RIPOSTE_HOLD  = C("RIPOSTE_HOLD", 0.30)
 
 local RIPOSTE_STATUS     = C("RIPOSTE_STATUS", "RiposteBlock")
-local RIPOSTE_FALLBACK   = C("RIPOSTE_FALLBACK", true)
+local RIPOSTE_FALLBACK   = C("RIPOSTE_FALLBACK", false)
 local RIPOSTE_WIN_START  = C("RIPOSTE_WIN_START", 0.45)
 local RIPOSTE_WIN_END    = C("RIPOSTE_WIN_END",   1.35)
 local RIPOSTE_COOLDOWN   = C("RIPOSTE_COOLDOWN", 1.50)
@@ -184,6 +185,8 @@ local move_last={}
 local parry_fire={}
 local f_start=0
 local f_end=0
+local block_start=0
+local block_end=0
 local prev_riposte=false
 local riposte_scheduled=false
 local riposte_win_start=0
@@ -193,7 +196,7 @@ local last_riposte_trigger=-999
 local function reset_detection()
     prev_clash=false; prev_signal=false; backup_time=0; backup_armed=false
     move_prev={}; move_last={}; parry_fire={}
-    f_start=0; f_end=0
+    f_start=0; f_end=0; block_start=0; block_end=0
     prev_riposte=false; riposte_scheduled=false; riposte_win_start=0; riposte_win_end=0
 end
 
@@ -228,6 +231,9 @@ while script_state.running do
                         if info.action == "riposte" then
                             f_start = now + (info.windup - RIPOSTE_LEAD - PING_LEAD)
                             f_end   = f_start + RIPOSTE_HOLD
+                        elseif info.action == "block" then
+                            block_start = now + (info.windup - BLOCK_LEAD - PING_LEAD)
+                            block_end   = block_start + (info.hold or 0.5)
                         else
                             parry_fire[nm] = now + (info.windup - CLASH_TO_HIT - PING_LEAD)
                         end
@@ -266,10 +272,19 @@ while script_state.running do
                         riposte_scheduled = false
                     end
                 end
+
+                local block_active=false
+                if (block_start ~= 0) and now >= block_start and now <= block_end and in_range then
+                    block_active = true
+                elseif (block_start ~= 0) and now > block_end then
+                    block_start = 0; block_end = 0
+                end
+
                 if heavy_active then set_block(false); set_heavy_block(true); mode="heavy"
+                elseif block_active then set_heavy_block(false); set_block(true); mode="timed"
                 else set_heavy_block(false) end
 
-                if not heavy_active and in_range then
+                if not heavy_active and not block_active and in_range then
                     local clash_now  = has_effect(target, CLASH_EFFECT)
                     local signal_now = has_effect(target, SIGNAL_EFFECT)
                     if clash_now and not prev_clash then tap_parry("clash") end
@@ -286,7 +301,7 @@ while script_state.running do
                     prev_signal = has_effect(target, SIGNAL_EFFECT)
                 end
 
-                if not heavy_active and not parry_busy then set_block(false) end
+                if not heavy_active and not block_active and not parry_busy then set_block(false) end
             end
         else
             target=nil; set_heavy_block(false); reset_detection()
