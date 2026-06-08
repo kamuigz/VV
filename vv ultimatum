@@ -14,13 +14,16 @@
 --
 -- HEAVY KICK -> M2 PERFECT PARRY (timed, AUTO):
 --     Heavy Kick produces NO CanClash and is unblockable, but it CAN be
---     perfect-parried. Calibrated windup ~555ms (Cooldown "Heavy Kick" -> hit).
---     We schedule a timed M2 tap to land ~83ms before impact.
---     More timed attacks can be added in TIMED_PARRIES below.
+--     perfect-parried. Calibrated windup ~554ms across 3 samples (560/551/552),
+--     measured Cooldown "Heavy Kick" -> hit. We tap M2 to land ~83ms pre-impact.
+--     Running Attack (668ms windup) raises CanClash @+531ms -> auto-handled.
+--     Add more attacks to the MOVES table below as you calibrate them.
 --
--- RIPOSTE moves -> F / RiposteBlock (AUTO):
---     When the enemy raises the "RiposteBlock" status (e.g. False Cutter), F is
---     held automatically across the windup window (~0.45–1.35s) and released.
+-- RIPOSTE moves -> F / RiposteBlock (AUTO, PER-MOVE TIMED):
+--     Each riposte move (e.g. False Cutter) is timed to ITS OWN windup so fast
+--     and slow moves both land — F engages just before impact, not on a single
+--     shared window. Uncalibrated riposte moves fall back to a generic window
+--     on the "RiposteBlock" status until you add them to MOVES.
 --
 -- Matcha external = polling only; we read the enemy's Status + Cooldowns folders.
 --
@@ -91,13 +94,24 @@ local BACKUP_ENABLED = C("BACKUP_ENABLED", true)
 -- ----- TIMED M2 perfect-parries (attacks with NO CanClash) -----
 -- Each entry: trigger name (found in Cooldowns OR Status) + windup (s, tell->hit).
 -- M2 is tapped to land CLASH_TO_HIT before the hit. Add more as you calibrate.
-local TIMED_PARRIES = C("TIMED_PARRIES", {
-    { name = "Heavy Kick", windup = 0.555 },   -- Gelum Heavy Kick (~560/551ms)
+-- Each move maps to an action timed to ITS OWN windup (tell -> hit, seconds):
+--    action = "parry"   -> tap M2 to land CLASH_TO_HIT before impact (perfect parry)
+--    action = "riposte" -> press F (RiposteBlock) to land RIPOSTE_LEAD before
+--                          impact, held RIPOSTE_HOLD seconds
+-- This is what fixes "F too early/late": every move gets its own timing instead
+-- of one shared window. Calibrate windup from logger dumps (Cooldown+ -> HIT).
+local MOVES = C("MOVES", {
+    ["Heavy Kick"]   = { action = "parry",   windup = 0.554 }, -- 3 samples: 560/551/552ms
+    ["False Cutter"] = { action = "riposte", windup = 1.222 }, -- 1 sample — refine me
 })
-local TIMED_COOLDOWN = C("TIMED_COOLDOWN", 0.80) -- min gap between re-arming the same attack
+local MOVE_COOLDOWN = C("MOVE_COOLDOWN", 0.80)  -- min gap before re-arming the same move
+local RIPOSTE_LEAD  = C("RIPOSTE_LEAD", 0.12)   -- F engages this long before impact
+local RIPOSTE_HOLD  = C("RIPOSTE_HOLD", 0.30)   -- F held this long around impact
 
--- ----- RiposteBlock (F) — fires on the enemy "RiposteBlock" status -----
+-- ----- RiposteBlock (F) FALLBACK — generic window on the "RiposteBlock" status -----
+-- Used ONLY for riposte moves not yet calibrated in MOVES (best-effort).
 local RIPOSTE_STATUS     = C("RIPOSTE_STATUS", "RiposteBlock")
+local RIPOSTE_FALLBACK   = C("RIPOSTE_FALLBACK", true)
 local RIPOSTE_WIN_START  = C("RIPOSTE_WIN_START", 0.45)  -- F down this long after status appears
 local RIPOSTE_WIN_END    = C("RIPOSTE_WIN_END",   1.35)  -- F released this long after status appears
 local RIPOSTE_COOLDOWN   = C("RIPOSTE_COOLDOWN", 1.50)
@@ -233,11 +247,15 @@ local prev_clash=false
 local prev_signal=false
 local backup_time=0
 local backup_armed=false
--- timed parry state (per attack name)
-local timed_prev={}        -- name -> bool present last frame
-local timed_fire={}        -- name -> tick() to fire M2, or nil
-local timed_last={}        -- name -> last arm time
--- riposte (F) state
+-- per-move state (keyed by move name)
+local move_prev={}         -- name -> present last frame
+local move_last={}         -- name -> last arm time
+local parry_fire={}        -- name -> tick() to tap M2 (parry moves), or nil
+-- single F engagement window (one riposte resolves at a time)
+local f_start=0
+local f_end=0
+local f_active=false
+-- generic RiposteBlock-status fallback state
 local prev_riposte=false
 local riposte_scheduled=false
 local riposte_win_start=0
@@ -246,11 +264,15 @@ local last_riposte_trigger=-999
 
 local function reset_detection()
     prev_clash=false; prev_signal=false; backup_time=0; backup_armed=false
-    timed_prev={}; timed_fire={}; timed_last={}
+    move_prev={}; move_last={}; parry_fire={}
+    f_start=0; f_end=0; f_active=false
     prev_riposte=false; riposte_scheduled=false; riposte_win_start=0; riposte_win_end=0
 end
 
-print(("VV AutoParry loaded. Lock key=%s | ping=%dms | HeavyKick=M2 perfect-parry | RiposteBlock(F)=auto. Press lock key over an enemy."):format(tostring(LOCK_KEY_NAME), PING_MS))
+do
+    local n=0; for _ in pairs(MOVES) do n=n+1 end
+    print(("VV AutoParry loaded. Lock key=%s | ping=%dms | %d calibrated moves | per-move timed M2/F. Press lock key over an enemy."):format(tostring(LOCK_KEY_NAME), PING_MS, n))
+end
 
 -- ============================ main loop ============================
 local last_lock=false
@@ -276,47 +298,63 @@ while script_state.running do
                 local in_range = dist_sq(tr.Position,mr.Position) <= RANGE_SQ
                 local now=tick()
 
-                -- ----- RIPOSTE (F / RiposteBlock): on enemy RiposteBlock status -----
-                local riposte_now = has_effect(target, RIPOSTE_STATUS)
-                if in_range and riposte_now and not prev_riposte and (now-last_riposte_trigger) > RIPOSTE_COOLDOWN then
-                    last_riposte_trigger = now
-                    riposte_scheduled = true
-                    riposte_win_start = now + (RIPOSTE_WIN_START - PING_LEAD)
-                    riposte_win_end   = now + (RIPOSTE_WIN_END   - PING_LEAD)
-                    last_reason = "armed RiposteBlock"
+                -- ----- PER-MOVE timed actions (detected by name) -----
+                -- Arm each known move on its rising edge and schedule its action
+                -- timed to that move's own windup (fixes fast-vs-slow F timing).
+                for nm,info in pairs(MOVES) do
+                    local present = attack_present(target, nm)
+                    if in_range and present and not move_prev[nm]
+                       and (now - (move_last[nm] or -999)) > MOVE_COOLDOWN then
+                        move_last[nm] = now
+                        if info.action == "riposte" then
+                            f_start = now + (info.windup - RIPOSTE_LEAD - PING_LEAD)
+                            f_end   = f_start + RIPOSTE_HOLD
+                            last_reason = "armed "..nm.." (F)"
+                        else -- parry
+                            parry_fire[nm] = now + (info.windup - CLASH_TO_HIT - PING_LEAD)
+                            last_reason = "armed "..nm.." (M2)"
+                        end
+                    end
+                    move_prev[nm] = present
                 end
-                prev_riposte = riposte_now
 
+                -- fire scheduled M2 perfect-parries
+                for nm,t in pairs(parry_fire) do
+                    if t and now >= t then
+                        parry_fire[nm] = nil
+                        if in_range then tap_parry(nm.." parry"); mode="timed" end
+                    end
+                end
+
+                -- ----- GENERIC RiposteBlock fallback (uncalibrated moves) -----
+                if RIPOSTE_FALLBACK then
+                    local riposte_now = has_effect(target, RIPOSTE_STATUS)
+                    if in_range and riposte_now and not prev_riposte and (now-last_riposte_trigger) > RIPOSTE_COOLDOWN then
+                        last_riposte_trigger = now
+                        riposte_scheduled = true
+                        riposte_win_start = now + (RIPOSTE_WIN_START - PING_LEAD)
+                        riposte_win_end   = now + (RIPOSTE_WIN_END   - PING_LEAD)
+                        last_reason = "armed RiposteBlock (fallback)"
+                    end
+                    prev_riposte = riposte_now
+                end
+
+                -- ----- Resolve F (riposte) engagement: per-move window OR fallback window -----
                 local heavy_active=false
-                if riposte_scheduled then
+                if (f_start ~= 0) and now >= f_start and now <= f_end and in_range then
+                    heavy_active = true; last_reason = "RiposteBlock (F)"
+                elseif (f_start ~= 0) and now > f_end then
+                    f_start = 0; f_end = 0
+                end
+                if not heavy_active and riposte_scheduled then
                     if now >= riposte_win_start and now <= riposte_win_end and in_range then
-                        heavy_active = true
-                        set_block(false); set_heavy_block(true)
-                        last_reason = "RiposteBlock (F)"
+                        heavy_active = true; last_reason = "RiposteBlock (F fallback)"
                     elseif now > riposte_win_end then
-                        riposte_scheduled = false; set_heavy_block(false)
+                        riposte_scheduled = false
                     end
                 end
-                if heavy_active then mode="heavy" else set_heavy_block(false) end
-
-                -- ----- TIMED M2 perfect-parries (Heavy Kick, etc.) -----
-                if not heavy_active then
-                    for _,tp in ipairs(TIMED_PARRIES) do
-                        local nm = tp.name
-                        local present = attack_present(target, nm)
-                        if in_range and present and not timed_prev[nm]
-                           and (now - (timed_last[nm] or -999)) > TIMED_COOLDOWN then
-                            timed_last[nm] = now
-                            timed_fire[nm] = now + (tp.windup - CLASH_TO_HIT - PING_LEAD)
-                            last_reason = "armed "..nm
-                        end
-                        timed_prev[nm] = present
-                        if timed_fire[nm] and now >= timed_fire[nm] then
-                            timed_fire[nm] = nil
-                            if in_range then tap_parry(nm.." parry"); mode="timed" end
-                        end
-                    end
-                end
+                if heavy_active then set_block(false); set_heavy_block(true); mode="heavy"
+                else set_heavy_block(false) end
 
                 -- ----- LIGHT parry on CanClash (+ signal backup) -----
                 if not heavy_active and in_range then
