@@ -1,7 +1,11 @@
 -- VV AutoParry — Matcha EXTERNAL (release build, M2-only)
--- Parries any CanClash window (self or enemy while attacking) + per-move timed block-holds.
--- Calibrated: Gelum, Scorpion Hollow, Giant Dragonfly. Set PING_MS or leave AUTO_PING on per player.
--- _G.VV_AUTOPARRY = { LOCK_KEY = "C", PING_MS = 0, AUTO_PING = true, SHOW_RADIUS = true }
+-- Calibrated: Gelum, Scorpion Hollow, Giant Dragonfly. Tune timing via your ping (PING_MS / AUTO_PING).
+-- _G.VV_AUTOPARRY = {
+--     LOCK_KEY    = "C",     -- Change it to whatever keybind you want
+--     PING_MS     = 0,       -- manual ping compensation (ms) if auto ping isnt that good for you
+--     AUTO_PING   = true,    -- autoparry adapts off your ping; falls back to PING_MS
+--     SHOW_RADIUS = true,
+-- }
 -- loadstring(game:HttpGet("GITHUBLINK"))()
 
 local Players   = game:GetService("Players")
@@ -32,38 +36,39 @@ local function C(key, default)
     return default
 end
 
-local LOCK_KEY  = resolve_key(C("LOCK_KEY", "C"), "C")
-local PING_MS   = C("PING_MS", 0)
-local AUTO_PING = C("AUTO_PING", true)
-local PING_LEAD = math.max(0, PING_MS) / 1000
+local LOCK_KEY    = resolve_key(C("LOCK_KEY", "C"), "C")
+local PING_MS     = C("PING_MS", 0)
+local AUTO_PING   = C("AUTO_PING", true)
 local SHOW_RADIUS = C("SHOW_RADIUS", true)
-local DEBUG       = C("DEBUG", true)
-local RANGE     = C("RANGE", 14)
-local RANGE_SQ  = RANGE * RANGE
-local LivingFolderName = C("LIVING_FOLDER", "Living")
+local PING_LEAD   = math.max(0, PING_MS) / 1000
 
-local CLASH_EFFECT   = C("CLASH_EFFECT", "CanClash")
-local SIGNAL_EFFECT  = C("SIGNAL_EFFECT", "AttackingSignal")
-local SIGNAL_TO_HIT  = C("SIGNAL_TO_HIT", 0.535)
-local CLASH_TO_HIT   = C("CLASH_TO_HIT", 0.083)
+local DEBUG       = true
+local RANGE       = 32
+local RANGE_SQ    = RANGE * RANGE
+local LivingFolderName = "Living"
+
+local CLASH_EFFECT   = "CanClash"
+local SIGNAL_EFFECT  = "AttackingSignal"
+local SIGNAL_TO_HIT  = 0.535
+local CLASH_TO_HIT   = 0.083
 local BACKUP_AFTER_SIGNAL = SIGNAL_TO_HIT - CLASH_TO_HIT
-local PARRY_HOLD     = C("PARRY_HOLD", 0.22)
-local PARRY_COOLDOWN = C("PARRY_COOLDOWN", 0.12)
-local BACKUP_ENABLED = C("BACKUP_ENABLED", true)
+local PARRY_HOLD     = 0.28
+local PARRY_COOLDOWN = 0.12
+local BACKUP_ENABLED = true
 
-local MOVES = C("MOVES", {
+local MOVES = {
     ["Heavy Kick"]                  = { action = "parry", windup = 0.554 },
     ["False Cutter"]                = { action = "block", windup = 1.222, hold = 0.50 },
     ["ScorpionHollow_PoisonBreath"] = { action = "block", windup = 1.382, hold = 0.55 },
     ["GiantDragonfly_Slam"]         = { action = "block", windup = 0.753, hold = 0.45 },
     ["GiantDragonfly_Tailwhip"]     = { action = "block", windup = 1.457, hold = 0.45 },
     ["GiantDragonfly_Grab"]         = { action = "block", windup = 1.493, hold = 0.45 },
-})
-local MOVE_COOLDOWN = C("MOVE_COOLDOWN", 0.45)
-local BLOCK_LEAD = C("BLOCK_LEAD", 0.22)
-local LIGHT_PARRY   = C("LIGHT_PARRY", true)
-local LIGHT_WINDUP  = C("LIGHT_WINDUP", 0.64)
-local ATTACK_EFFECT = C("ATTACK_EFFECT", "Attacking")
+}
+local MOVE_COOLDOWN  = 0.45
+local BLOCK_LEAD     = 0.22
+local LIGHT_PARRY    = true
+local LIGHT_WINDUP   = 0.60
+local ATTACK_EFFECT  = "Attacking"
 
 local v3 = Vector3.new
 local color_green = Color3.new(0,1,0)
