@@ -150,12 +150,26 @@ local function display_name(m)
     return "enemy"
 end
 
+local function candidate_targets()
+    local list, seen = {}, {}
+    local folder=living_folder()
+    if folder then
+        for _,m in ipairs(folder:GetChildren()) do
+            if not seen[m] then seen[m]=true; list[#list+1]=m end
+        end
+    end
+    for _,pl in ipairs(Players:GetPlayers()) do
+        local ch=pl.Character
+        if ch and not seen[ch] then seen[ch]=true; list[#list+1]=ch end
+    end
+    return list
+end
+
 local function closest_to_cursor()
     local mr=my_root(); if not mr then return nil end
-    local folder=living_folder(); if not folder then return nil end
     local mx,my=Mouse.X,Mouse.Y
     local bs,bsd,bw,bwd=nil,math.huge,nil,math.huge
-    for _,m in ipairs(folder:GetChildren()) do
+    for _,m in ipairs(candidate_targets()) do
         if is_enemy(m) then
             local r=get_hrp(m)
             if r then
