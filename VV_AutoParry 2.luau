@@ -60,6 +60,8 @@ local MOVES = {
     ["Heavy Kick"]                  = { action = "parry", windup = 0.554 },
     ["False Cutter"]                = { action = "block", windup = 1.222, hold = 0.50 },
     ["ScorpionHollow_PoisonBreath"] = { action = "block", windup = 1.382, hold = 0.55 },
+    ["Roar"]                        = { action = "block", windup = 0.30,  hold = 0.80 },
+    ["ScorpionPoison"]              = { action = "block", windup = 0.25,  hold = 0.70 },
     ["GiantDragonfly_Slam"]         = { action = "block", windup = 0.753, hold = 0.45 },
     ["GiantDragonfly_Tailwhip"]     = { action = "block", windup = 1.457, hold = 0.45 },
     ["GiantDragonfly_Grab"]         = { action = "block", windup = 1.493, hold = 0.45 },
