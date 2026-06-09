@@ -54,8 +54,6 @@ local BACKUP_ENABLED = C("BACKUP_ENABLED", true)
 local MOVES = C("MOVES", {
     ["Heavy Kick"]                  = { action = "parry", windup = 0.554 },
     ["False Cutter"]                = { action = "block", windup = 1.222, hold = 0.50 },
-    ["ScorpionHollow_RightSwing"]   = { action = "parry", windup = 0.681 },
-    ["ScorpionHollow_LeftSwing"]    = { action = "parry", windup = 0.638 },
     ["ScorpionHollow_PoisonBreath"] = { action = "block", windup = 1.382, hold = 0.55 },
     ["GiantDragonfly_Slam"]         = { action = "block", windup = 0.753, hold = 0.45 },
     ["GiantDragonfly_Tailwhip"]     = { action = "block", windup = 1.457, hold = 0.45 },
@@ -63,6 +61,9 @@ local MOVES = C("MOVES", {
 })
 local MOVE_COOLDOWN = C("MOVE_COOLDOWN", 0.45)
 local BLOCK_LEAD = C("BLOCK_LEAD", 0.22)
+local LIGHT_PARRY   = C("LIGHT_PARRY", true)
+local LIGHT_WINDUP  = C("LIGHT_WINDUP", 0.64)
+local ATTACK_EFFECT = C("ATTACK_EFFECT", "Attacking")
 
 local v3 = Vector3.new
 local color_green = Color3.new(0,1,0)
@@ -226,6 +227,7 @@ end
 local target=nil
 local prev_clash=false
 local prev_signal=false
+local prev_attacking=false
 local backup_time=0
 local backup_armed=false
 local move_prev={}
@@ -237,7 +239,7 @@ local block_end=0
 local function reset_detection()
     prev_clash=false; prev_signal=false; backup_time=0; backup_armed=false
     move_prev={}; move_last={}; parry_fire={}
-    block_start=0; block_end=0
+    block_start=0; block_end=0; prev_attacking=false
 end
 
 dbg("loaded — hover an enemy and press the lock key", true)
@@ -278,6 +280,14 @@ while script_state.running do
                         end
                     end
                     move_prev[nm] = present
+                end
+
+                if LIGHT_PARRY then
+                    local attacking_now = has_effect(target, ATTACK_EFFECT)
+                    if in_range and attacking_now and not prev_attacking then
+                        parry_fire["__light"] = now + (LIGHT_WINDUP - CLASH_TO_HIT - PING_LEAD)
+                    end
+                    prev_attacking = attacking_now
                 end
 
                 for nm,t in pairs(parry_fire) do
