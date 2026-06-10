@@ -42,6 +42,7 @@ local HUGE_RANGE    = 35
 local USE_CUSTOM_RADIUS = (type(RADIUS_SIZE) == "number" and RADIUS_SIZE > 0)
 if USE_CUSTOM_RADIUS then DEFAULT_RANGE = RADIUS_SIZE end
 local RANGE       = DEFAULT_RANGE
+local ACTION_LOCKOUT = 0.50
 local RANGE_SQ    = RANGE * RANGE
 local LivingFolderName = "Living"
 local CLASH_EFFECT   = "CanClash"
@@ -50,7 +51,7 @@ local SIGNAL_TO_HIT  = 0.565
 local CLASH_TO_HIT   = 0.093
 local BACKUP_AFTER_SIGNAL = SIGNAL_TO_HIT - CLASH_TO_HIT
 local PARRY_HOLD     = 0.28
-local PARRY_COOLDOWN = 0.10
+local PARRY_COOLDOWN = 0.30
 local BACKUP_ENABLED = true
 local MOVES = {
     ["Heavy Kick"] = {
@@ -379,7 +380,16 @@ local function reset_detection()
     move_prev={}; move_last={}; signal_prev={}; parry_fire={}; dodge_fire={}
     block_start=0; block_end=0; prev_attacking=false
 end
+local last_action_time = 0
+local function action_locked(now)
+    return (now - last_action_time) < ACTION_LOCKOUT
+end
 local function execute_move(nm, info, now, pl)
+    if action_locked(now) then return end
+    last_action_time = now
+    parry_fire = {}
+    dodge_fire = {}
+    backup_armed = false
     if info.action == "dodge" then
         local delay = info.windup - 0.20 - pl
         if delay < 0.05 then delay = 0.05 end
@@ -398,17 +408,13 @@ local function classify_and_respond(m, now, pl)
     if has_effect(m, CLASH_EFFECT) then
         return "parry"
     end
-    if has_effect(m, "AttackingCanBlock") then
-        return "block"
-    end
     if has_effect(m, "AnimArmor") and has_effect(m, "Attacking") then
         return "dodge"
     end
-    if has_effect(m, "Attacking") and not has_effect(m, "AttackingCanBlock")
-       and not has_effect(m, CLASH_EFFECT) then
-        return "dodge"
+    if has_effect(m, "AttackingCanBlock") then
+        return "block"
     end
-    return nil
+    return "parry"
 end
 dbg("VV AutoParry v2.1 loaded", true)
 local last_lock=false
@@ -489,23 +495,26 @@ while script_state.running do
                 if not block_active and in_range then
                     local clash_now  = clash_state(target)
                     local signal_now = has_effect(target, SIGNAL_EFFECT)
-                    if clash_now and not prev_clash then
-                        local handled = false
-                        for nm,_ in pairs(parry_fire) do handled=true; break end
-                        if not handled then
+                    if clash_now and not prev_clash and not action_locked(now) then
+                        local has_pending = false
+                        for _,_ in pairs(parry_fire) do has_pending=true; break end
+                        for _,_ in pairs(dodge_fire) do has_pending=true; break end
+                        if not has_pending and block_start == 0 then
+                            last_action_time = now
                             tap_parry("clash")
                         end
                     end
-                    if BACKUP_ENABLED and signal_now and not prev_signal then
+                    if BACKUP_ENABLED and signal_now and not prev_signal and not action_locked(now) then
                         local has_named = false
-                        for nm,_ in pairs(parry_fire) do has_named=true; break end
-                        for nm,_ in pairs(dodge_fire) do has_named=true; break end
+                        for _,_ in pairs(parry_fire) do has_named=true; break end
+                        for _,_ in pairs(dodge_fire) do has_named=true; break end
                         if not has_named and (block_start == 0) then
                             backup_time=now+(BACKUP_AFTER_SIGNAL-pl); backup_armed=true
                         end
                     end
                     if backup_armed and now>=backup_time then
-                        if not parry_busy and not dodge_busy then
+                        if not parry_busy and not dodge_busy and not action_locked(now) then
+                            last_action_time = now
                             local reaction = classify_and_respond(target, now, pl)
                             if reaction == "dodge" then
                                 tap_dodge("fallback", "back")
