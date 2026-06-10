@@ -5,7 +5,14 @@
 --     PING_MS     = 0,       -- manual ping compensation (ms) if auto ping isnt that good for you
 --     AUTO_PING   = true,    -- autoparry adapts off your ping; falls back to PING_MS
 --     SHOW_RADIUS = true,
+--     RADIUS_SIZE = nil,     -- optional: set a number (e.g. 45) to force a custom radius.
+--                            --           when set, the auto Scorpion Hollow / Giant Dragonfly
+--                            --           radius boost is disabled and your value is always used.
 -- }
+--
+-- Radius behavior (when RADIUS_SIZE is NOT set):
+--   * locked onto Scorpion Hollow or Giant Dragonfly -> radius grows (BIG_RANGE = 60)
+--   * any other enemy / unlocked                      -> default radius (DEFAULT_RANGE = 32)
 -- loadstring(game:HttpGet("GITHUBLINK"))()
 
 local Players   = game:GetService("Players")
@@ -40,10 +47,22 @@ local LOCK_KEY    = resolve_key(C("LOCK_KEY", "C"), "C")
 local PING_MS     = C("PING_MS", 0)
 local AUTO_PING   = C("AUTO_PING", true)
 local SHOW_RADIUS = C("SHOW_RADIUS", true)
+local RADIUS_SIZE = C("RADIUS_SIZE", nil) -- set a number to force a custom radius (disables auto-scaling)
 local PING_LEAD   = math.max(0, PING_MS) / 1000
 
 local DEBUG       = true
-local RANGE       = 32
+
+-- Radius config -------------------------------------------------------------
+-- DEFAULT_RANGE : normal detection/visual radius.
+-- BIG_RANGE     : larger radius used while locked onto a Scorpion Hollow or Giant Dragonfly.
+-- RADIUS_SIZE   : if the user sets this (positive number), it ALWAYS wins and the
+--                 scorpion/dragonfly auto-enlarge effect is disabled for them.
+local DEFAULT_RANGE = 32
+local BIG_RANGE     = 60
+local USE_CUSTOM_RADIUS = (type(RADIUS_SIZE) == "number" and RADIUS_SIZE > 0)
+if USE_CUSTOM_RADIUS then DEFAULT_RANGE = RADIUS_SIZE end
+
+local RANGE       = DEFAULT_RANGE
 local RANGE_SQ    = RANGE * RANGE
 local LivingFolderName = "Living"
 
@@ -148,6 +167,30 @@ local function display_name(m)
     if not m then return "enemy" end
     if type(m.Name)=="string" and #m.Name>0 then return m.Name end
     return "enemy"
+end
+
+-- Scorpion Hollow / Giant Dragonfly get a larger radius when locked on.
+local function is_big_radius_enemy(m)
+    if not m then return false end
+    local n = tostring(m.Name):lower()
+    return (n:find("scorpion") ~= nil) or (n:find("dragonfly") ~= nil)
+end
+
+-- Recompute RANGE/RANGE_SQ based on the current lock target.
+-- Users with a custom RADIUS_SIZE always keep their value (no auto-scaling).
+local function apply_range_for_target(tgt)
+    local desired
+    if USE_CUSTOM_RADIUS then
+        desired = RADIUS_SIZE
+    elseif tgt and is_big_radius_enemy(tgt) then
+        desired = BIG_RANGE
+    else
+        desired = DEFAULT_RANGE
+    end
+    if desired ~= RANGE then
+        RANGE = desired
+        RANGE_SQ = RANGE * RANGE
+    end
 end
 
 local function candidate_targets()
@@ -275,6 +318,8 @@ while script_state.running do
         else target=closest_to_cursor(); reset_detection(); dbg(target and ("locked: "..display_name(target)) or "no enemy found near cursor", true) end
     end
     last_lock=lock_now
+
+    apply_range_for_target(target)
 
     local mr=my_root()
     if not mr then
