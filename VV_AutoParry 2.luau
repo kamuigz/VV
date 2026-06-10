@@ -11,7 +11,7 @@
 -- }
 --
 -- Radius behavior (when RADIUS_SIZE is NOT set):
---   * locked onto Scorpion Hollow or Giant Dragonfly -> radius grows (BIG_RANGE = 60)
+--   * locked onto Scorpion Hollow or Giant Dragonfly -> radius grows (BIG_RANGE = 45)
 --   * any other enemy / unlocked                      -> default radius (DEFAULT_RANGE = 32)
 -- loadstring(game:HttpGet("GITHUBLINK"))()
 
@@ -58,7 +58,7 @@ local DEBUG       = true
 -- RADIUS_SIZE   : if the user sets this (positive number), it ALWAYS wins and the
 --                 scorpion/dragonfly auto-enlarge effect is disabled for them.
 local DEFAULT_RANGE = 32
-local BIG_RANGE     = 60
+local BIG_RANGE     = 45
 local USE_CUSTOM_RADIUS = (type(RADIUS_SIZE) == "number" and RADIUS_SIZE > 0)
 if USE_CUSTOM_RADIUS then DEFAULT_RANGE = RADIUS_SIZE end
 
