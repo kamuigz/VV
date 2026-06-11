@@ -233,9 +233,6 @@ local function update_ping()
         ping_jitter_ms = 0
     end
 end
-
-
-
 local function get_ping_lead()
     if not AUTO_PING then
         return math.max(0, PING_MS) / 1000
