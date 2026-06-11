@@ -234,29 +234,7 @@ local function update_ping()
     end
 end
 
-local function update_adaptive_ping(now)
-    local self_stunned_now = self_has_effect("Stunned") or self_has_effect("Ragdoll")
-    local self_deflect_now = self_has_effect("Deflecting") or self_has_effect("AutoParry")
-                         or self_has_effect("Riposte")
 
-    if self_stunned_now and not prev_self_stunned then
-        local since = now - last_parry_attempt
-        if since > 0 and since < 0.8 then
-            adaptive_comp_ms = math.min(adaptive_comp_ms + ADAPT_UP, ADAPT_MAX)
-            dbg("LATE " .. math.floor(adaptive_comp_ms) .. "ms")
-        end
-    end
-
-    if self_deflect_now and not prev_self_deflecting then
-        local since = now - last_parry_attempt
-        if since > 0 and since < 0.8 then
-            adaptive_comp_ms = math.max(adaptive_comp_ms - ADAPT_DOWN, ADAPT_MIN)
-        end
-    end
-
-    prev_self_stunned = self_stunned_now
-    prev_self_deflecting = self_deflect_now
-end
 
 local function get_ping_lead()
     if not AUTO_PING then
@@ -384,6 +362,30 @@ end
 local function clash_state(m)
     if has_effect(m, CLASH_EFFECT) then return true end
     return self_has_effect(CLASH_EFFECT) and enemy_attacking(m)
+end
+
+local function update_adaptive_ping(now)
+    local self_stunned_now = self_has_effect("Stunned") or self_has_effect("Ragdoll")
+    local self_deflect_now = self_has_effect("Deflecting") or self_has_effect("AutoParry")
+                         or self_has_effect("Riposte")
+
+    if self_stunned_now and not prev_self_stunned then
+        local since = now - last_parry_attempt
+        if since > 0 and since < 0.8 then
+            adaptive_comp_ms = math.min(adaptive_comp_ms + ADAPT_UP, ADAPT_MAX)
+            dbg("LATE " .. math.floor(adaptive_comp_ms) .. "ms")
+        end
+    end
+
+    if self_deflect_now and not prev_self_deflecting then
+        local since = now - last_parry_attempt
+        if since > 0 and since < 0.8 then
+            adaptive_comp_ms = math.max(adaptive_comp_ms - ADAPT_DOWN, ADAPT_MIN)
+        end
+    end
+
+    prev_self_stunned = self_stunned_now
+    prev_self_deflecting = self_deflect_now
 end
 
 local blocking = false
