@@ -2,6 +2,7 @@ local Players   = game:GetService("Players")
 local Workspace = workspace or game:GetService("Workspace")
 local LP    = Players.LocalPlayer
 local Mouse = LP:GetMouse()
+
 local INSTANCE_KEY = "__VV_AUTOPARRY_MATCHA_STATE"
 local old = _G and _G[INSTANCE_KEY]
 if old then
@@ -10,41 +11,62 @@ if old then
 end
 local script_state = { running = true, drawings = {} }
 if _G then _G[INSTANCE_KEY] = script_state end
+
 local function resolve_key(key, fallback)
     if type(key) == "string" and #key >= 1 then
         return key:upper():sub(1,1):byte()
     end
     return fallback:byte()
 end
+
 local USER = (_G and _G.VV_AUTOPARRY) or {}
 local function C(key, default)
     local v = USER[key]
     if v ~= nil then return v end
     return default
 end
+
 local LOCK_KEY      = resolve_key(C("LOCK_KEY", "C"), "C")
-local PING_FLOOR_MS = C("PING_FLOOR_MS", 0)
-local PING_DEFAULT  = C("PING_DEFAULT", 50)
+local PING_MS       = C("PING_MS", 0)
+local AUTO_PING     = C("AUTO_PING", true)
 local SHOW_RADIUS   = C("SHOW_RADIUS", true)
-local SHOW_PING     = C("SHOW_PING", true)
 local RADIUS_SIZE   = C("RADIUS_SIZE", nil)
-local JITTER_MULT   = C("JITTER_MULT", 1.15)
-local DODGE_KEY     = C("DODGE_KEY", 0x51)
+
+local JITTER_MULT   = 1.15
+local DODGE_KEY     = 0x51
+local SHOW_PING     = true
+local PING_DEFAULT  = 50
+
 local DEBUG = true
-local ping_raw_ms     = PING_DEFAULT
-local ping_smooth_ms  = PING_DEFAULT
-local ping_jitter_ms  = 0
+
+local ping_raw_ms      = -1
+local ping_smooth_ms   = 0
+local ping_jitter_ms   = 0
 local ping_initialized = false
-local PING_EMA_ALPHA  = 0.3
+local ping_api_works   = false
+local ping_method      = "starting"
+local PING_EMA_ALPHA   = 0.3
+
+local adaptive_comp_ms  = PING_DEFAULT
+local ADAPT_UP          = 20
+local ADAPT_DOWN        = 6
+local ADAPT_MAX         = 450
+local ADAPT_MIN         = 0
+local prev_self_stunned     = false
+local prev_self_deflecting  = false
+local last_parry_attempt    = 0
+
 local DEFAULT_RANGE = 14
 local BIG_RANGE     = 30
 local HUGE_RANGE    = 35
 local USE_CUSTOM_RADIUS = (type(RADIUS_SIZE) == "number" and RADIUS_SIZE > 0)
 if USE_CUSTOM_RADIUS then DEFAULT_RANGE = RADIUS_SIZE end
+
 local RANGE       = DEFAULT_RANGE
 local ACTION_LOCKOUT = 0.50
 local RANGE_SQ    = RANGE * RANGE
 local LivingFolderName = "Living"
+
 local CLASH_EFFECT   = "CanClash"
 local SIGNAL_EFFECT  = "AttackingSignal"
 local SIGNAL_TO_HIT  = 0.565
@@ -53,6 +75,7 @@ local BACKUP_AFTER_SIGNAL = SIGNAL_TO_HIT - CLASH_TO_HIT
 local PARRY_HOLD     = 0.28
 local PARRY_COOLDOWN = 0.30
 local BACKUP_ENABLED = true
+
 local MOVES = {
     ["Heavy Kick"] = {
         action = "dodge", windup = 0.555, dodge_dir = "back",
@@ -87,25 +110,30 @@ local MOVES = {
     ["GiantDragonfly_Tailwhip"]     = { action = "block", windup = 1.457, hold = 0.45 },
     ["GiantDragonfly_Grab"]         = { action = "dodge", windup = 1.493, dodge_dir = "back" },
 }
+
 local SIGNAL_MOVES = {}
 for nm, info in pairs(MOVES) do
     if info.signal then
         SIGNAL_MOVES[info.signal] = { name = nm, info = info }
     end
 end
+
 local MOVE_COOLDOWN  = 0.45
 local BLOCK_LEAD     = 0.20
 local LIGHT_PARRY    = true
 local LIGHT_WINDUP   = 0.565
 local ATTACK_EFFECT  = "Attacking"
+
 local DODGE_DURATION = 0.18
 local DODGE_COOLDOWN = 0.40
+
 local v3 = Vector3.new
 local color_green  = Color3.new(0,1,0)
 local color_red    = Color3.new(1,0,0)
 local color_cyan   = Color3.new(0,1,1)
 local color_orange = Color3.new(1,0.6,0)
 local segs = 16
+
 local function track(o) script_state.drawings[#script_state.drawings+1]=o; return o end
 local function remove_drawing(o)
     if not o then return end
@@ -117,6 +145,7 @@ script_state.cleanup = function()
     for i=1,#script_state.drawings do remove_drawing(script_state.drawings[i]) end
     script_state.drawings = {}
 end
+
 local circle = {}
 local enemy_label = nil
 local ping_label = nil
@@ -133,6 +162,7 @@ if SHOW_PING then
     ping_label.Outline=true; ping_label.Center=false; ping_label.Size=13
     ping_label.Color=Color3.new(1,1,1); ping_label.Position=Vector2.new(10,10); ping_label.Visible=true
 end
+
 local function safe(fn,fb) local ok,r=pcall(fn); if ok then return r end return fb end
 if type(setrobloxinput)=="function" then safe(function() setrobloxinput(true) end) end
 local last_dbg=0
@@ -149,56 +179,118 @@ local function my_root() return get_hrp(my_char()) end
 local function living_folder() return Workspace and Workspace:FindFirstChild(LivingFolderName) end
 local function status_folder(m) return m and m:FindFirstChild("Status") end
 local function cooldowns_folder(m) return m and m:FindFirstChild("Cooldowns") end
+
 local last_ping_poll = 0
-local function read_ping_raw()
+
+local function try_api_ping()
     local p = safe(function()
         local v = LP:GetNetworkPing()
         if type(v) == "number" and v > 0 then return v * 1000 end
-        return nil
     end)
-    if not p or p <= 0 then
-        p = safe(function()
-            local stats = game:GetService("Stats")
-            return stats.Network.ServerStatsItem["Data Ping"]:GetValue()
-        end)
-    end
-    if type(p) == "number" and p > 0 then
-        return p
-    end
-    return ping_initialized and ping_raw_ms or PING_DEFAULT
+    if type(p) == "number" and p > 0 then return p, "api" end
+
+    p = safe(function()
+        return game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue()
+    end)
+    if type(p) == "number" and p > 0 then return p, "stats" end
+
+    p = safe(function()
+        for _, d in ipairs(game:GetService("Stats"):GetDescendants()) do
+            if d.Name == "Data Ping" or d.Name == "Ping" then
+                local v = d:GetValue()
+                if type(v) == "number" and v > 0 then return v end
+            end
+        end
+    end)
+    if type(p) == "number" and p > 0 then return p, "stats2" end
+
+    return nil, nil
 end
+
 local function update_ping()
     local now = tick()
     if now - last_ping_poll < 0.5 then return end
     last_ping_poll = now
-    local raw = read_ping_raw()
-    ping_raw_ms = raw
-    if not ping_initialized then
-        ping_smooth_ms = raw
-        ping_initialized = true
+
+    local raw, method = try_api_ping()
+    if raw and raw > 0 then
+        ping_api_works = true
+        ping_method = method
+        ping_raw_ms = raw
+        if not ping_initialized then
+            ping_smooth_ms = raw
+            ping_initialized = true
+        else
+            ping_smooth_ms = ping_smooth_ms + PING_EMA_ALPHA * (raw - ping_smooth_ms)
+        end
+        local jitter = math.abs(raw - ping_smooth_ms)
+        ping_jitter_ms = ping_jitter_ms + PING_EMA_ALPHA * (jitter - ping_jitter_ms)
     else
-        ping_smooth_ms = ping_smooth_ms + PING_EMA_ALPHA * (raw - ping_smooth_ms)
+        ping_api_works = false
+        ping_method = "adaptive"
+        ping_raw_ms = adaptive_comp_ms
+        ping_smooth_ms = adaptive_comp_ms
+        ping_jitter_ms = 0
     end
-    local jitter = math.abs(raw - ping_smooth_ms)
-    ping_jitter_ms = ping_jitter_ms + PING_EMA_ALPHA * (jitter - ping_jitter_ms)
 end
+
+local function update_adaptive_ping(now)
+    local self_stunned_now = self_has_effect("Stunned") or self_has_effect("Ragdoll")
+    local self_deflect_now = self_has_effect("Deflecting") or self_has_effect("AutoParry")
+                         or self_has_effect("Riposte")
+
+    if self_stunned_now and not prev_self_stunned then
+        local since = now - last_parry_attempt
+        if since > 0 and since < 0.8 then
+            adaptive_comp_ms = math.min(adaptive_comp_ms + ADAPT_UP, ADAPT_MAX)
+            dbg("LATE " .. math.floor(adaptive_comp_ms) .. "ms")
+        end
+    end
+
+    if self_deflect_now and not prev_self_deflecting then
+        local since = now - last_parry_attempt
+        if since > 0 and since < 0.8 then
+            adaptive_comp_ms = math.max(adaptive_comp_ms - ADAPT_DOWN, ADAPT_MIN)
+        end
+    end
+
+    prev_self_stunned = self_stunned_now
+    prev_self_deflecting = self_deflect_now
+end
+
 local function get_ping_lead()
-    local compensated = ping_smooth_ms * JITTER_MULT + ping_jitter_ms
-    compensated = math.max(compensated, PING_FLOOR_MS)
-    return compensated / 1000
+    if not AUTO_PING then
+        return math.max(0, PING_MS) / 1000
+    end
+    local comp
+    if ping_api_works then
+        comp = ping_smooth_ms * JITTER_MULT + ping_jitter_ms
+    else
+        comp = adaptive_comp_ms
+    end
+    comp = math.max(comp, PING_MS)
+    return comp / 1000
 end
+
 local function update_ping_hud()
     if not SHOW_PING or not ping_label then return end
     local lead = get_ping_lead()
-    ping_label.Text = ("PING %dms (smooth:%d jit:%d comp:%d)"):format(
-        math.floor(ping_raw_ms + 0.5),
-        math.floor(ping_smooth_ms + 0.5),
-        math.floor(ping_jitter_ms + 0.5),
-        math.floor(lead * 1000 + 0.5))
-    local ratio = ping_raw_ms / 150
+    local comp_ms = math.floor(lead * 1000 + 0.5)
+    if not AUTO_PING then
+        ping_label.Text = ("[manual] PING_MS:%dms"):format(PING_MS)
+    elseif ping_api_works then
+        ping_label.Text = ("[%s] PING %dms comp:%dms"):format(
+            ping_method,
+            math.floor(ping_raw_ms + 0.5),
+            comp_ms)
+    else
+        ping_label.Text = ("[adaptive] comp:%dms"):format(comp_ms)
+    end
+    local ratio = comp_ms / 200
     if ratio > 1 then ratio = 1 end
     ping_label.Color = Color3.new(ratio, 1 - ratio * 0.7, ratio < 0.5 and 1 - ratio or 0)
 end
+
 local function is_enemy(m)
     if not m or not m.Parent then return false end
     if m==my_char() then return false end
@@ -211,11 +303,13 @@ local function display_name(m)
     if type(m.Name)=="string" and #m.Name>0 then return m.Name end
     return "enemy"
 end
+
 local BOSS_RANGES = {
     gelum      = HUGE_RANGE,
     scorpion   = BIG_RANGE,
     dragonfly  = BIG_RANGE,
 }
+
 local function get_enemy_range(m)
     if not m then return DEFAULT_RANGE end
     local n = tostring(m.Name):lower()
@@ -224,6 +318,7 @@ local function get_enemy_range(m)
     end
     return DEFAULT_RANGE
 end
+
 local function apply_range_for_target(tgt)
     local desired
     if USE_CUSTOM_RADIUS then
@@ -236,6 +331,7 @@ local function apply_range_for_target(tgt)
         RANGE_SQ = RANGE * RANGE
     end
 end
+
 local function candidate_targets()
     local list, seen = {}, {}
     local folder=living_folder()
@@ -250,6 +346,7 @@ local function candidate_targets()
     end
     return list
 end
+
 local function closest_to_cursor()
     local mr=my_root(); if not mr then return nil end
     local mx,my=Mouse.X,Mouse.Y
@@ -267,6 +364,7 @@ local function closest_to_cursor()
     end
     return bs or bw
 end
+
 local function has_effect(m,name)
     local s=status_folder(m); return s~=nil and s:FindFirstChild(name)~=nil
 end
@@ -287,15 +385,17 @@ local function clash_state(m)
     if has_effect(m, CLASH_EFFECT) then return true end
     return self_has_effect(CLASH_EFFECT) and enemy_attacking(m)
 end
+
 local blocking = false
 local function m2_down() if type(mouse2press)=="function" then safe(mouse2press) elseif type(mousepress)=="function" then safe(function() mousepress(2) end) end end
 local function m2_up()   if type(mouse2release)=="function" then safe(mouse2release) elseif type(mouserelease)=="function" then safe(function() mouserelease(2) end) end end
 local function set_block(s) if s==blocking then return end blocking=s; if s then m2_down() else m2_up() end end
+
 local parry_busy, last_parry_time = false, 0
 local function tap_parry(reason)
     if parry_busy then return false end
     if tick()-last_parry_time < PARRY_COOLDOWN then return false end
-    parry_busy=true; last_parry_time=tick()
+    parry_busy=true; last_parry_time=tick(); last_parry_attempt=tick()
     dbg("PARRY ("..tostring(reason)..")")
     task.spawn(function()
         if not script_state.running then parry_busy=false return end
@@ -304,6 +404,7 @@ local function tap_parry(reason)
     end)
     return true
 end
+
 local dodge_busy, last_dodge_time = false, 0
 local function tap_dodge(reason, direction)
     if dodge_busy then return false end
@@ -316,6 +417,7 @@ local function tap_dodge(reason, direction)
         if direction == "left" then dir_key = 0x41
         elseif direction == "right" then dir_key = 0x44
         elseif direction == "forward" then dir_key = 0x57 end
+
         if type(keypress)=="function" then
             safe(function() keypress(dir_key) end)
             safe(function() keypress(DODGE_KEY) end)
@@ -327,12 +429,14 @@ local function tap_dodge(reason, direction)
     end)
     return true
 end
+
 local last_action_text = ""
 local last_action_time = 0
 local function show_action(text)
     last_action_text = text
     last_action_time = tick()
 end
+
 local function hide_visuals()
     if not SHOW_RADIUS then return end
     for i=1,segs do circle[i].Visible=false end
@@ -354,6 +458,7 @@ local function draw_visuals(mr,tr,target,mode)
         local lp,on=WorldToScreen(tr.Position+v3(0,4,0))
         if on then enemy_label.Text=display_name(target); enemy_label.Position=Vector2.new(lp.X,lp.Y); enemy_label.Visible=true else enemy_label.Visible=false end
     elseif enemy_label then enemy_label.Visible=false end
+
     if action_label then
         if tick() - last_action_time < 1.5 and target and tr then
             local lp,on=WorldToScreen(tr.Position+v3(0,5.5,0))
@@ -362,6 +467,7 @@ local function draw_visuals(mr,tr,target,mode)
         else action_label.Visible=false end
     end
 end
+
 local target=nil
 local prev_clash=false
 local prev_signal=false
@@ -375,15 +481,19 @@ local parry_fire={}
 local dodge_fire={}
 local block_start=0
 local block_end=0
+
 local function reset_detection()
     prev_clash=false; prev_signal=false; backup_time=0; backup_armed=false
     move_prev={}; move_last={}; signal_prev={}; parry_fire={}; dodge_fire={}
     block_start=0; block_end=0; prev_attacking=false
 end
+
 local last_action_time = 0
+
 local function action_locked(now)
     return (now - last_action_time) < ACTION_LOCKOUT
 end
+
 local function execute_move(nm, info, now, pl)
     if action_locked(now) then return end
     last_action_time = now
@@ -404,6 +514,7 @@ local function execute_move(nm, info, now, pl)
         show_action(">> PARRY: " .. nm)
     end
 end
+
 local function classify_and_respond(m, now, pl)
     if has_effect(m, CLASH_EFFECT) then
         return "parry"
@@ -416,19 +527,24 @@ local function classify_and_respond(m, now, pl)
     end
     return "parry"
 end
+
 dbg("VV AutoParry v2.1 loaded", true)
 local last_lock=false
 while script_state.running do
     task.wait()
     update_ping()
     update_ping_hud()
+    update_adaptive_ping(tick())
+
     local lock_now = type(iskeypressed)=="function" and iskeypressed(LOCK_KEY) or false
     if lock_now and not last_lock then
         if target then target=nil; set_block(false); reset_detection(); dbg("unlocked", true)
         else target=closest_to_cursor(); reset_detection(); dbg(target and ("locked: "..display_name(target)) or "no enemy found near cursor", true) end
     end
     last_lock=lock_now
+
     apply_range_for_target(target)
+
     local mr=my_root()
     if not mr then
         target=nil; set_block(false); reset_detection(); hide_visuals()
@@ -441,6 +557,7 @@ while script_state.running do
                 local in_range = dist_sq(tr.Position,mr.Position) <= RANGE_SQ
                 local now=tick()
                 local pl = get_ping_lead()
+
                 for nm,info in pairs(MOVES) do
                     local present = attack_present(target, nm)
                     if in_range and present and not move_prev[nm]
@@ -450,6 +567,7 @@ while script_state.running do
                     end
                     move_prev[nm] = present
                 end
+
                 for sig_name, sig_data in pairs(SIGNAL_MOVES) do
                     local present = has_effect(target, sig_name)
                     if in_range and present and not signal_prev[sig_name]
@@ -468,6 +586,7 @@ while script_state.running do
                     end
                     signal_prev[sig_name] = present
                 end
+
                 for nm,t in pairs(dodge_fire) do
                     if t and now >= t then
                         dodge_fire[nm] = nil
@@ -479,22 +598,27 @@ while script_state.running do
                         end
                     end
                 end
+
                 for nm,t in pairs(parry_fire) do
                     if t and now >= t then
                         parry_fire[nm] = nil
                         if in_range then tap_parry("timed:" .. nm); mode="timed" end
                     end
                 end
+
                 local block_active=false
                 if (block_start ~= 0) and now >= block_start and now <= block_end and in_range then
                     block_active = true
                 elseif (block_start ~= 0) and now > block_end then
                     block_start = 0; block_end = 0
                 end
+
                 if block_active then set_block(true); mode="timed" end
+
                 if not block_active and in_range then
                     local clash_now  = clash_state(target)
                     local signal_now = has_effect(target, SIGNAL_EFFECT)
+
                     if clash_now and not prev_clash and not action_locked(now) then
                         local has_pending = false
                         for _,_ in pairs(parry_fire) do has_pending=true; break end
@@ -504,6 +628,7 @@ while script_state.running do
                             tap_parry("clash")
                         end
                     end
+
                     if BACKUP_ENABLED and signal_now and not prev_signal and not action_locked(now) then
                         local has_named = false
                         for _,_ in pairs(parry_fire) do has_named=true; break end
@@ -530,19 +655,23 @@ while script_state.running do
                         end
                         backup_armed=false
                     end
+
                     prev_clash=clash_now; prev_signal=signal_now
                 else
                     prev_clash  = clash_state(target)
                     prev_signal = has_effect(target, SIGNAL_EFFECT)
                 end
+
                 if not block_active and not parry_busy and not dodge_busy then set_block(false) end
             end
         else
             target=nil; reset_detection()
             if not parry_busy and not dodge_busy then set_block(false) end
         end
+
         draw_visuals(mr,tr,target,mode)
     end
 end
+
 set_block(false); hide_visuals(); script_state.cleanup()
 if _G and _G[INSTANCE_KEY]==script_state then _G[INSTANCE_KEY]=nil end
